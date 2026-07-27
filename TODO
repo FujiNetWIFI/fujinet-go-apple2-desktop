@@ -1,0 +1,103 @@
+FujiNet Go Apple II (desktop) -- rolling notes
+==============================================
+
+Follows the 10-step order of work in fujinet-go-adam-desktop/PORTING.md §12.
+
+Done (this pass)
+----------------
+
+M1 -- core + GNOME frontend, emulator half only:
+
+* Repo skeleton, GPL-3.0, two pinned submodules:
+    third_party/applewin           FujiNetWIFI/AppleWin @ 25e8ddd (branch linux)
+    third_party/fujinet-firmware   FujiNetWIFI/fujinet-firmware @ 7a994ab
+* cmake/Dependencies.cmake -- apple2_provide_dependency(), 3-step resolution
+  (<NAME>_SRC override -> submodule -> clone the pin), sentinel files, pin
+  drift warning.
+* cmake/StageAppleWin.cmake -- copies source/resource/libyaml/minizip/bin
+  into core/applewin-generated (file(COPY), not rsync: Windows), then runs
+  tools/applewin/patch-staged-tree.py through ${Python3_EXECUTABLE}. MSYS2
+  CMake cannot execute_process a .sh, but a native python is fine.
+  .source-info records the source commit + a hash of the patch script, so
+  editing a transform re-stages. -DAPPLEWIN_RESTAGE=ON forces it.
+* tools/applewin/patch-staged-tree.py -- the 13 transforms, ported from the
+  Android build-applewin-core.sh. All idempotent, all hard-fail on a missing
+  anchor. NOTE: the idempotency test must check the REPLACEMENT before the
+  anchor -- several transforms wrap their anchor rather than replacing it, so
+  anchor-first re-applies them (nested Boost if(), duplicated slot7 block).
+* core/ -- libapple2session:
+    applewin/apple2_host.{cpp,h}  the libretro frontend, ported from Android
+                                  (android/log.h replaced by a log-sink seam)
+    src/session.c                 paced emulator thread, vsync phase-lock
+    src/input_map.c               X11 keysym -> libretro (keycode, char, mods)
+    src/{settings,paths,audio_sdl,gamepad_sdl,fujinet_runtime}.c
+  Differences from the ADAM target, all deliberate:
+    - frames are XRGB8888 uint32, not RGB565
+    - geometry is NOT fixed: copy_frame reports w/h, because a VidHD card in
+      slot 3 switches the core between 560x384 and 640x400
+    - audio is interleaved stereo, not mono (FujiNet's SAM overlay is mono and
+      is mixed into both channels)
+    - the joystick is a pair of analog paddles, not a digital stick
+* frontends/gnome -- GTK4 + libadwaita, XRGB8888 straight into a
+  GdkMemoryTexture (no per-pixel conversion), aspect TV 4:3 / square / integer,
+  preferences over the shared settings store.
+  NOTE: Alt is NOT passed to the window manager here (unlike the ADAM
+  frontend) -- the Alt keys are Open Apple and Closed Apple.
+* ctest: input (key + paddle mapping), boot_smoke (headless core boot),
+  desktop_entry_gnome, metainfo_gnome. All passing.
+* COMPLIANCE.md.
+
+Verified: Enhanced Apple //e boots to its banner in the GNOME window at
+60 fps with 60/60 frames on vsync (APPLE2_PACE_LOG=1).
+
+Findings worth remembering
+--------------------------
+
+* The AppleWin libretro core's DEFAULT video_mode is "Color (RGB Card/Monitor)",
+  which emulates an RGB card. With no such card fitted it renders a blank text
+  screen as blue horizontal banding instead of black -- the boot screen is
+  unreadable, and it looks exactly like a framebuffer/stride bug. Every other
+  mode renders correctly. We default to "Color (Composite Monitor)" and expose
+  the setting. Worth reporting upstream.
+* createRetroRegistry() returns an EMPTY registry, so anything not covered by
+  a core option falls back to AppleWin's internal default. There is no slot6
+  core option, so the Disk ][ in slot 6 is not configurable from here.
+* DebugGetVideoMode() returns the *debugger's* video-mode override, not the
+  machine's -- it leaves the output untouched when the debugger is inactive.
+  Use Video::GetVideoMode() via GetVideo() to read the real one.
+
+Next
+----
+
+M2  clone-and-build: verify a fresh clone with no *_SRC, and a tree with no
+    git metadata (the clone-the-pin path), both build.
+M3  FujiNet in-process -- THE LONG POLE.
+    - tools/fujinet/build-fujinet-desktop.sh forked from adam's (851 lines):
+      PC_TARGET="APPLE", [BOIP] port=1985, web UI 8000.
+    - keep all 11 target-independent patch blocks; ADD the two APPLE ones
+      (fnFsSPIFFS.cpp and mgHttpClient.cpp must root their paths absolutely
+      from FUJINET_RUNTIME_ROOT -- AppleWin's SetCurrentImageDir chdir()s and
+      moves the shared process CWD out from under FujiNet).
+    - expect a NEW set of MinGW portability gaps in lib/device/iwm and
+      lib/bus/iwm; nobody has built that device tree for Windows.
+    - cmake/FujiNetRuntime.cmake currently self-disables with a warning until
+      the script exists. Replace it with adam's real one.
+    - curate fnconfig.ini: the Android app still ships the ATARI default.
+    - before blaming the bus, check for a stray standalone fujinet-pc-apple2
+      holding port 1985 (one exists in ~/Workspace/fujinet-pc-apple2/build).
+M4  settings, media import, ROM import (needed for WITH_APPLE_ROMS=OFF --
+    see COMPLIANCE.md; currently OFF is a hard error), gamepad, audio.
+M5  KDE frontend (early, to keep the core toolkit-agnostic).
+M6  debugger engine + first native window. Investigate the single-step seam
+    EARLY: AppleWin executes per-cycle inside executeOneFrame() and there is
+    no ready single-instruction entry point at the libretro boundary. Stage
+    the read-only views first so the debugger is useful even if stepping is
+    late. Symbols are free -- bin/*.SYM are already staged.
+M7  CI: linux, then macOS and Windows, then flatpak.
+    Top Windows risk: the AppleWin libretro frontend has never been built
+    under MinGW (the cross-compile work upstream covers the SDL2 frontend).
+M8  icons (art is in ~/Workspace/fujinet-go-launchers/ic_launcher_APPLE2),
+    desktop entries, AppStream, screenshots.
+M9  flatpak (Boost headers must be a declared module -- the GNOME/KDE SDKs do
+    not ship them), NSIS, release job.
+M10 macOS + Windows frontends and their debugger windows.

@@ -1,0 +1,7 @@
+[submodule "third_party/applewin"]
+	path = third_party/applewin
+	url = https://github.com/FujiNetWIFI/AppleWin
+	branch = linux
+[submodule "third_party/fujinet-firmware"]
+	path = third_party/fujinet-firmware
+	url = https://github.com/FujiNetWIFI/fujinet-firmware

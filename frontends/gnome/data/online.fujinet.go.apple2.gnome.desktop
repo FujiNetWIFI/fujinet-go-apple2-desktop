@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FujiNet Go Apple II
+GenericName=Apple II with FujiNet
+Comment=Self-contained Apple II computer with built-in FujiNet
+Exec=fujinet-go-apple2-gnome
+Icon=online.fujinet.go.apple2.gnome
+Terminal=false
+Categories=Game;Emulator;
+Keywords=apple;apple2;appleii;applewin;fujinet;emulator;
+StartupNotify=true

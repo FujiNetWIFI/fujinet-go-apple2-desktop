@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>online.fujinet.go.apple2.gnome</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>FujiNet Go Apple II</name>
+  <summary>Self-contained Apple II with built-in FujiNet</summary>
+  <description>
+    <p>
+      An Apple II with FujiNet built in: mount disk images from TNFS servers
+      or the local SD folder, configure everything through the embedded
+      FujiNet web UI, and play with automatic gamepad support driving the
+      analog paddles.
+    </p>
+    <p>
+      Emulation is provided by AppleWin, with FujiNet attached as a SmartPort
+      card in slot 7 -- the slot the Apple //e autostart ROM scans before the
+      Disk ][, so the machine boots straight into FujiNet's CONFIG.
+    </p>
+  </description>
+  <launchable type="desktop-id">online.fujinet.go.apple2.gnome.desktop</launchable>
+  <!-- Software centres classify from these, not from the .desktop
+       Categories= line; without them the app lands in no section at all. -->
+  <categories>
+    <category>Game</category>
+    <category>Emulator</category>
+  </categories>
+  <url type="homepage">https://fujinet.online/</url>
+  <url type="bugtracker">https://github.com/FujiNetWIFI/fujinet-go-apple2-desktop/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>FujiNet CONFIG running on the emulated Apple II</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/main/data/screenshots/1_running_config.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Preferences</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/main/data/screenshots/2_Preferences.png</image>
+    </screenshot>
+  </screenshots>
+  <developer id="online.fujinet">
+    <name>Thomas Cherryhomes</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-07-27">
+      <description>
+        <p>
+          First release of the Apple II desktop app: AppleWin's libretro core
+          driven on a vsync-phase-locked emulator thread, with the FujiNet
+          firmware built in-process and joined over SmartPort-over-SLIP.
+        </p>
+      </description>
+    </release>
+  </releases>
+</component>
