@@ -22,6 +22,7 @@
 #include <time.h>
 
 #include "apple2_host.h"
+#include "apple2debug.h"
 #include "compat.h"
 #include "session_internal.h"
 
@@ -313,7 +314,10 @@ static void *emu_thread_main(void *arg)
                 apple2host_ctrl_reset();
         }
 
-        apple2host_core_run_frame();
+        if (s->dbg_engaged)
+            apple2debug_session_frame(s);
+        else
+            apple2host_core_run_frame();
 
         /* Pacing: one emulated frame per UI vsync tick while ticks arrive,
          * else the wall clock. Once-per-second diagnostics with
@@ -400,6 +404,7 @@ void apple2session_free(apple2session *s)
     apple2session_stop(s);
     apple2session_settings_flush(s);
     settings_free_all(s);
+    apple2debug_destroy(s->debugger);
     pthread_mutex_destroy(&s->lifecycle_mtx);
     pthread_mutex_destroy(&s->frame_mtx);
     pthread_mutex_destroy(&s->vs_mtx);
@@ -552,6 +557,8 @@ void apple2session_stop(apple2session *s)
         return;
     }
     s->stop_flag = 1;
+    if (s->debugger)
+        apple2debug_resume_for_stop(s->debugger);
     pthread_mutex_lock(&s->start_mtx);
     if (s->core_started == 0) s->core_started = -1;
     pthread_cond_broadcast(&s->start_cv);
@@ -658,10 +665,30 @@ int apple2session_fujinet_copy_log(apple2session *s, char *dst, int max)
 
 apple2debug *apple2session_debugger(apple2session *s)
 {
-    /* The debugger engine lands with the 6502 disassembler; until then the
-     * frontends' F12 handlers see NULL and leave the menu item insensitive. */
-    (void)s;
-    return NULL;
+    /* Created lazily: a session that never opens the debugger pays nothing,
+     * and while it is disengaged the emulator loop costs one volatile read
+     * per frame. */
+    pthread_mutex_lock(&s->lifecycle_mtx);
+    if (!s->debugger) {
+        s->debugger = apple2debug_create(s);
+        if (s->debugger) {
+            /* AppleWin ships these and the staging step copies them in, so
+             * unlike the ADAM target there is no extraction script to run.
+             * Best effort: a missing file just means no labels. */
+            static const char *const k_syms[] = {
+                "APPLE2E.SYM", "A2_BASIC.SYM", "A2_DOS33.SYM2", NULL
+            };
+            char path[APPLE2_PATH_MAX];
+            int i;
+            for (i = 0; k_syms[i]; i++) {
+                snprintf(path, sizeof(path), "%s/%s", s->symbols_dir,
+                         k_syms[i]);
+                apple2debug_symbols_load(s->debugger, path);
+            }
+        }
+    }
+    pthread_mutex_unlock(&s->lifecycle_mtx);
+    return s->debugger;
 }
 
 /****************************************************************************/

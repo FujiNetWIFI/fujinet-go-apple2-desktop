@@ -147,11 +147,13 @@ add_library(apple2session STATIC
   src/audio_sdl.c
   src/gamepad_sdl.c
   src/fujinet_runtime.c
+  debugger/m6502dasm.c
+  debugger/debugger.c
 )
 
 target_include_directories(apple2session
   PUBLIC include applewin
-  PRIVATE src
+  PRIVATE src debugger
           "${AW}/source"
           "${AW}/source/frontends/libretro/libretro-common/include"
 )
@@ -159,9 +161,17 @@ target_include_directories(apple2session
 # buffers from other max-sized buffers; snprintf truncation is the intended
 # clamp there, not a bug.
 target_compile_options(apple2session PRIVATE -Wall -Wextra -Wno-format-truncation)
+# apple2_host.cpp is the one TU that includes AppleWin's headers, and those
+# headers are not -Wall -Wextra clean (member-init order, unused parameters in
+# the Card base class). They are upstream's to fix; silencing them only here
+# keeps our own warnings visible instead of drowned.
+set_source_files_properties(applewin/apple2_host.cpp PROPERTIES
+  COMPILE_OPTIONS "-Wno-reorder;-Wno-unused-parameter")
 target_compile_definitions(apple2session PRIVATE
   _GNU_SOURCE
   APPLE2_DEV_FUJINET_OUT="${CMAKE_SOURCE_DIR}/tools/fujinet/work/out"
+  # AppleWin's debug symbol tables, staged into the tree by StageAppleWin.
+  APPLE2_SOURCE_SYMBOLS_DIR="${AW}/bin"
   APPLE2_INSTALL_DATADIR="${CMAKE_INSTALL_FULL_DATADIR}/fujinet-go-apple2"
   APPLE2_INSTALL_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/fujinet-go-apple2"
 )
@@ -180,6 +190,11 @@ else()
   target_link_libraries(apple2session PUBLIC dl m)
 endif()
 
+# The debugger reads AppleWin's symbol tables at run time; ship them.
+install(FILES "${AW}/bin/APPLE2E.SYM" "${AW}/bin/A2_BASIC.SYM"
+              "${AW}/bin/A2_DOS33.SYM2"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/fujinet-go-apple2/symbols)
+
 # ---- tests -----------------------------------------------------------------
 add_executable(input_test tests/input_test.c)
 target_link_libraries(input_test apple2session)
@@ -190,10 +205,20 @@ target_link_libraries(boot_smoke apple2session)
 add_executable(debug_seam_test tests/debug_seam_test.c)
 target_link_libraries(debug_seam_test apple2session)
 
+add_executable(debug_engine_test tests/debug_engine_test.c)
+target_link_libraries(debug_engine_test apple2session)
+
+add_executable(dasm_test tests/dasm_test.c)
+target_link_libraries(dasm_test apple2session)
+target_include_directories(dasm_test PRIVATE debugger)
+
 add_test(NAME input COMMAND input_test)
+add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME debug_seam COMMAND debug_seam_test)
-set_tests_properties(boot_smoke debug_seam PROPERTIES SKIP_RETURN_CODE 77)
+add_test(NAME debug_engine COMMAND debug_engine_test)
+set_tests_properties(boot_smoke debug_seam debug_engine
+                     PROPERTIES SKIP_RETURN_CODE 77)
 
 # Makes the COMPLIANCE.md claim checkable: a ROM-less build must not have any
 # Apple (or third-party card) firmware compiled into it. Only meaningful for

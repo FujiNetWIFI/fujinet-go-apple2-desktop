@@ -189,10 +189,24 @@ M6  debugger. THE SEAM IS DONE AND TESTED; the engine and windows remain.
     NOTE: read through `mem`, NOT MemGetMainPtr() -- the latter returns the
     main RAM image, so $FF00 would read as RAM instead of the ROM the 6502 is
     actually executing.
-    Remaining: the engine (breakpoints, run-to, trace) and the native windows,
-    both mechanical ports from adam, plus a fresh 6502/65C02 disassembler and
-    Apple II video views. Symbols are free -- bin/*.SYM are already staged.
-    All of it must run on the emulator thread with the loop parked.
+    ENGINE AND DISASSEMBLER NOW DONE TOO:
+      core/debugger/m6502dasm.c  fresh table-driven 6502/65C02 decoder, the
+        full 65C02 matrix. Opcodes the 65C02 does not define decode as 1-byte
+        "???" rather than as NMOS undocumented instructions -- on a 65C02
+        those slots really are NOPs, and a plausible NMOS mnemonic would be
+        actively misleading. dasm_test sweeps all 256.
+      core/debugger/debugger.c   pause/resume, step into/over/out, run-to,
+        breakpoints, disassembly, symbols. Everything touching core state runs
+        on the EMULATOR thread; UI calls only set flags and wait.
+        "Engaged" swaps the session's whole-frame call for a stepped loop, so
+        a session that never opens the debugger pays one volatile read a frame.
+      debug_engine_test drives it from a UI thread against a real running
+        machine and checks the disassembled lengths tile the address range.
+    Symbols load from AppleWin's own APPLE2E.SYM / A2_BASIC.SYM / A2_DOS33.SYM2,
+    which staging already copies in -- no extraction script for this target.
+    Remaining for M6: the native debugger windows (GNOME + KDE), and Apple II
+    video views (text / lo-res / hi-res page decoders) to replace adam's
+    vdpview.c.
 M7  CI: linux, then macOS and Windows, then flatpak.
     Top Windows risk: the AppleWin libretro frontend has never been built
     under MinGW (the cross-compile work upstream covers the SDL2 frontend).

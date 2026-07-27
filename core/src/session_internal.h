@@ -34,7 +34,8 @@ struct apple2session {
     /* ---- resolved paths ---- */
     char config_dir[APPLE2_PATH_MAX];
     char data_dir[APPLE2_PATH_MAX];
-    char roms_dir[APPLE2_PATH_MAX];  /* user-supplied system ROMs */
+    char roms_dir[APPLE2_PATH_MAX];    /* user-supplied system ROMs */
+    char symbols_dir[APPLE2_PATH_MAX]; /* AppleWin's *.SYM, for the debugger */
     char settings_file[APPLE2_PATH_MAX];
     char fujinet_lib[APPLE2_PATH_MAX];  /* "" = unavailable/disabled */
     char fujinet_src[APPLE2_PATH_MAX];  /* provisioning source override */
@@ -130,6 +131,15 @@ void audio_stop(apple2session *s);
 /* gamepad_sdl.c */
 int  gamepad_start(apple2session *s);
 void gamepad_stop(apple2session *s);
+
+/* debugger.c -- all emulator-thread side except create/destroy. */
+apple2debug *apple2debug_create(apple2session *s);
+void apple2debug_destroy(apple2debug *d);
+/* One debugger-controlled frame slice; returns 1 when a frame's worth of
+ * cycles ran. May block while paused. */
+int  apple2debug_session_frame(apple2session *s);
+/* Unpark a paused debugger so a stopping emulator thread can exit. */
+void apple2debug_resume_for_stop(apple2debug *d);
 
 /* fujinet_runtime.c */
 int  fujinet_start(apple2session *s);

@@ -212,6 +212,18 @@ int paths_init(apple2session *s, const apple2session_paths *p)
     snprintf(s->roms_dir, sizeof(s->roms_dir), "%s/roms", s->data_dir);
     mkdir_p(s->roms_dir);
 
+    /* AppleWin's debug symbol tables (APPLE2E.SYM and friends). The staging
+     * step copies bin/ into the tree, and the install rules put them beside
+     * the other shared data; prefer an installed copy, fall back to the build
+     * tree so an uninstalled run still gets labels. */
+#ifdef APPLE2_INSTALL_DATADIR
+    snprintf(s->symbols_dir, sizeof(s->symbols_dir), "%s/symbols",
+             APPLE2_INSTALL_DATADIR);
+    if (!is_dir(s->symbols_dir))
+#endif
+        snprintf(s->symbols_dir, sizeof(s->symbols_dir), "%s",
+                 APPLE2_SOURCE_SYMBOLS_DIR);
+
     if (p && p->fujinet_lib) /* may be "" = explicitly disabled */
         snprintf(s->fujinet_lib, sizeof(s->fujinet_lib), "%s", p->fujinet_lib);
     else
