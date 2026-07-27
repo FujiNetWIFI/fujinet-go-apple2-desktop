@@ -19,8 +19,8 @@ follows.
 > display vsync, with keyboard and paddle input, disk/ROM import, and a 6502
 > debugger with its own native window on all four frontends. Linux, macOS,
 > Windows and both flatpaks are green in CI, which also builds the Windows
-> installer and the macOS bundle and can cut a release. Still to come: the
-> code signing for the macOS bundle. See `TODO`.
+> installer and the macOS bundle and can cut a release. Still to come: code
+> signing for the macOS bundle. See `TODO`.
 
 ## Building
 
@@ -155,7 +155,7 @@ core/
   src/        session, pacing, settings, paths, input, audio, gamepad, FujiNet
   tests/      ctest suite
 frontends/    one directory per native toolkit
-tools/        AppleWin staging patches, FujiNet build recipe, icons
+tools/        AppleWin staging patches, FujiNet build recipe, icons, debugger font
 third_party/  pinned submodules
 ```
 
