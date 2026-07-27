@@ -236,7 +236,9 @@ M8 -- icons done. Rendered by tools/icons/make-icons.py from the Android
   install rules referenced an icon set that did not exist. CI now runs
   cmake --install and checks for the desktop entries, metainfo, icons, symbol
   tables and the binary.
-  Still to do for M8: screenshots for the AppStream metainfo.
+  M8 is done: screenshots are captured (data/screenshots/) and referenced from
+  both metainfo files -- CONFIG running on GNOME, the 6502 debugger, and
+  CONFIG on KDE. appstreamcli --pedantic passes.
 M9  flatpak (Boost headers must be a declared module -- the GNOME/KDE SDKs do
     not ship them), NSIS, release job.
 M10 macOS + Windows frontends and their debugger windows.

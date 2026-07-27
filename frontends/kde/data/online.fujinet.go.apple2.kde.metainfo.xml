@@ -30,11 +30,11 @@
   <screenshots>
     <screenshot type="default">
       <caption>FujiNet CONFIG running on the emulated Apple II</caption>
-      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/main/data/screenshots/1_running_config.png</image>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/main/data/screenshots/3_kde.png</image>
     </screenshot>
     <screenshot>
-      <caption>Preferences</caption>
-      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/main/data/screenshots/2_Preferences.png</image>
+      <caption>The built-in 6502 debugger</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/main/data/screenshots/2_debugger.png</image>
     </screenshot>
   </screenshots>
   <developer id="online.fujinet">
