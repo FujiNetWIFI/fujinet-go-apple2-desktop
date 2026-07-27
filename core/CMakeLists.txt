@@ -187,9 +187,13 @@ target_link_libraries(input_test apple2session)
 add_executable(boot_smoke tests/boot_smoke.c)
 target_link_libraries(boot_smoke apple2session)
 
+add_executable(debug_seam_test tests/debug_seam_test.c)
+target_link_libraries(debug_seam_test apple2session)
+
 add_test(NAME input COMMAND input_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
-set_tests_properties(boot_smoke PROPERTIES SKIP_RETURN_CODE 77)
+add_test(NAME debug_seam COMMAND debug_seam_test)
+set_tests_properties(boot_smoke debug_seam PROPERTIES SKIP_RETURN_CODE 77)
 
 # Makes the COMPLIANCE.md claim checkable: a ROM-less build must not have any
 # Apple (or third-party card) firmware compiled into it. Only meaningful for

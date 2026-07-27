@@ -170,11 +170,29 @@ M5 -- KDE frontend done. Plain Qt6 Widgets, no KDE Frameworks. QOpenGLWidget
 Next
 ----
 M4  remaining: gamepad/paddle testing against real hardware, audio check.
-M6  debugger engine + first native window. Investigate the single-step seam
-    EARLY: AppleWin executes per-cycle inside executeOneFrame() and there is
-    no ready single-instruction entry point at the libretro boundary. Stage
-    the read-only views first so the debugger is useful even if stepping is
-    late. Symbols are free -- bin/*.SYM are already staged.
+M6  debugger. THE SEAM IS DONE AND TESTED; the engine and windows remain.
+    The earlier worry -- that AppleWin executes per-cycle with no
+    single-instruction entry point at the libretro boundary -- was WRONG.
+    CPU.cpp documents it in so many words:
+        // uCycles:
+        //  =0  : Do single step
+        //  >0  : Do multi-opcode emulation
+    So the seam is just:
+      step      CpuExecute(0, true)          -- plain free function
+      registers `regs` (regsrec, CPU.h)      -- plain global
+      memory    `mem` (Memory.h)             -- the CPU's ACTIVE 64K view
+    apple2host_{get,set}_regs / _step_instruction / _{read,write}_mem expose
+    these, and core/tests/debug_seam_test.c proves them: PC advances one
+    instruction at a time within a sane cycle count, registers round-trip
+    without disturbing PC, ROM at $FF00 reads as ROM, RAM round-trips, and
+    reading $C000 does not toggle a soft switch or jam the CPU.
+    NOTE: read through `mem`, NOT MemGetMainPtr() -- the latter returns the
+    main RAM image, so $FF00 would read as RAM instead of the ROM the 6502 is
+    actually executing.
+    Remaining: the engine (breakpoints, run-to, trace) and the native windows,
+    both mechanical ports from adam, plus a fresh 6502/65C02 disassembler and
+    Apple II video views. Symbols are free -- bin/*.SYM are already staged.
+    All of it must run on the emulator thread with the loop parked.
 M7  CI: linux, then macOS and Windows, then flatpak.
     Top Windows risk: the AppleWin libretro frontend has never been built
     under MinGW (the cross-compile work upstream covers the SDL2 frontend).

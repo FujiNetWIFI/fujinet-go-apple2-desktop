@@ -74,6 +74,33 @@ double apple2host_frame_rate(void);
 void apple2host_ctrl_reset(void);
 void apple2host_power_cycle(void);
 
+/* ---- debugger seam -------------------------------------------------------
+ * All of these touch live core state, so they must be called from the
+ * emulator thread -- in practice from inside the session's frame loop, with
+ * the loop parked. They are the foundation the debugger engine builds on.
+ *
+ * AppleWin turns out to expose exactly what is needed: CpuExecute() documents
+ * "uCycles: =0 : Do single step", so there IS a clean single-instruction
+ * entry point, and the register file and memory image are plain globals. */
+typedef struct {
+    uint8_t  a, x, y, ps;
+    uint16_t pc, sp;
+    uint8_t  jammed;    /* NMOS 6502 has executed an illegal opcode */
+} apple2host_regs;
+
+void apple2host_get_regs(apple2host_regs *out);
+void apple2host_set_regs(const apple2host_regs *in);
+
+/* Execute exactly one instruction and return the cycles it took. */
+unsigned apple2host_step_instruction(void);
+
+/* Read/write the CPU's current memory view (what the 6502 would see at that
+ * address right now, respecting bank switching). Reads are non-intrusive:
+ * they go through the memory image, not through the soft-switch handlers, so
+ * inspecting $C000-$CFFF in a debugger cannot toggle hardware. */
+void apple2host_read_mem(uint16_t addr, uint8_t *out, unsigned len);
+void apple2host_write_mem(uint16_t addr, const uint8_t *in, unsigned len);
+
 /* Pull interleaved stereo int16 @ 44100Hz. Blocks briefly for a full block
  * (bounded, ~1.5 block durations) then silence-pads, so the caller always
  * gets max_samples back and an underrun is a short gap rather than a stall.

@@ -19,11 +19,23 @@
 #include <string>
 #include <vector>
 
+// AppleWin's prologue: its sources are a former Win32 project and every TU
+// gets BYTE/WORD/LPBYTE and friends from here (on Linux they come from the
+// libwindows shim). It has to precede any other AppleWin header.
+#include <StdAfx.h>
+
+// The debugger seam needs the real register file and memory accessors, so
+// these come from AppleWin's own headers rather than being redeclared here --
+// a hand-copied `regsrec` would rot silently the first time upstream changed
+// it. This is the one translation unit permitted to include them.
+#include "CPU.h"
+#include "Memory.h"
+
 #include "libretro.h"
 
 // AppleWin's two reset entry points (defined in source/Utilities.cpp,
 // statically linked from the core). Forward-declared with C++ linkage rather
-// than via Utilities.h to avoid pulling AppleWin's full header set in here.
+// than via Utilities.h, which drags in the frame/interface machinery.
 //   CtrlReset()         : warm reset  (Ctrl-Reset)
 //   ResetMachineState() : power-cycle (Ctrl-OpenApple-Reset)
 void CtrlReset();
@@ -345,6 +357,55 @@ void apple2host_core_stop(void) {
 
 void apple2host_ctrl_reset(void) { CtrlReset(); }
 void apple2host_power_cycle(void) { ResetMachineState(); }
+
+// --- debugger seam ----------------------------------------------------------
+
+void apple2host_get_regs(apple2host_regs* out) {
+    if (!out) return;
+    out->a      = regs.a;
+    out->x      = regs.x;
+    out->y      = regs.y;
+    out->ps     = regs.ps;
+    out->pc     = regs.pc;
+    out->sp     = regs.sp;
+    out->jammed = regs.bJammed;
+}
+
+void apple2host_set_regs(const apple2host_regs* in) {
+    if (!in) return;
+    regs.a        = in->a;
+    regs.x        = in->x;
+    regs.y        = in->y;
+    regs.ps       = in->ps;
+    regs.pc       = in->pc;
+    regs.sp       = in->sp;
+    regs.bJammed  = in->jammed;
+}
+
+unsigned apple2host_step_instruction(void) {
+    // CPU.cpp: "uCycles: =0 : Do single step". bVideoUpdate stays true so the
+    // video scanner keeps pace with the CPU while stepping.
+    return static_cast<unsigned>(CpuExecute(0, true));
+}
+
+// `mem` is the CPU's ACTIVE 64K view -- whatever is banked in right now,
+// including ROM and language-card state. MemGetMainPtr() would hand back the
+// main RAM image instead, so $FF00 would read as RAM rather than the ROM the
+// 6502 actually executes. Reading it directly is also what makes the access
+// non-intrusive: it never runs the soft-switch handlers, so peeking at
+// $C000-$CFFF in a debugger cannot toggle hardware.
+void apple2host_read_mem(uint16_t addr, uint8_t* out, unsigned len) {
+    if (!out) return;
+    if (!mem) { std::memset(out, 0, len); return; }
+    for (unsigned i = 0; i < len; ++i)
+        out[i] = mem[static_cast<uint16_t>(addr + i)];
+}
+
+void apple2host_write_mem(uint16_t addr, const uint8_t* in, unsigned len) {
+    if (!in || !mem) return;
+    for (unsigned i = 0; i < len; ++i)
+        mem[static_cast<uint16_t>(addr + i)] = in[i];
+}
 
 void apple2host_get_geometry(int* width, int* height) {
     if (width) *width = g_width;
