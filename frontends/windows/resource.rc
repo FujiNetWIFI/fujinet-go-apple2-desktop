@@ -1,0 +1,7 @@
+#include "resource.h"
+
+IDI_APPICON ICON "app.ico"
+
+/* 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID: visual styles (comctl32 v6) and
+ * per-monitor DPI awareness. */
+1 24 "app.manifest"

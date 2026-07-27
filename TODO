@@ -167,8 +167,8 @@ M5 -- KDE frontend done. Plain Qt6 Widgets, no KDE Frameworks. QOpenGLWidget
   * ShortcutOverride is accepted for everything except F10/F11 -- Alt must not
     reach the menu bar, it is Open/Closed Apple.
 
-Next
-----
+Milestone notes (M4 onward)
+---------------------------
 M4  remaining: gamepad/paddle testing against real hardware, audio check.
 M6  debugger. THE SEAM IS DONE AND TESTED; the engine and windows remain.
     The earlier worry -- that AppleWin executes per-cycle with no
@@ -239,6 +239,80 @@ M8 -- icons done. Rendered by tools/icons/make-icons.py from the Android
   M8 is done: screenshots are captured (data/screenshots/) and referenced from
   both metainfo files -- CONFIG running on GNOME, the 6502 debugger, and
   CONFIG on KDE. appstreamcli --pedantic passes.
-M9  flatpak (Boost headers must be a declared module -- the GNOME/KDE SDKs do
-    not ship them), NSIS, release job.
-M10 macOS + Windows frontends and their debugger windows.
+M9 -- packaging DONE.
+    Flatpak manifests for both frontends; every input declared (SDL3, Boost
+    headers, mbedTLS 3.6.5 + the threading sed, the PyYAML/Jinja2/MarkupSafe
+    sdists AND flit_core -- Jinja2's build backend, which the GNOME SDK
+    happens to ship and the KDE one does not).
+    Dropping the xxd dependency (tools/applewin/xxd-i.py, byte-identical to
+    real xxd) removed it from the flatpak SDKs, from apt, and from MSYS2 all
+    at once, and got rid of a shell redirection native Windows cmake choked
+    on.
+    NSIS installer: per-user install into %LOCALAPPDATA%\Programs, no UAC.
+    Its welcome page says outright that the ROMs are not included -- the
+    difference between "one more step" and "I got a black screen".
+    Release job: tag-gated, refuses to publish unless the tag, the VERSION in
+    CMakeLists.txt and every metainfo <release> agree; creates a DRAFT with
+    --generate-notes.
+    COMPLIANCE: every artifact CI uploads is built WITH_APPLE_ROMS=OFF, and
+    the OFF is pinned in the file that DEFINES the artifact (the two flatpak
+    manifests, the windows CI job), not in the command that invokes it. A
+    CMake default is a convenience; it is not a distribution policy, and
+    "remember to pass -DWITH_APPLE_ROMS=OFF when cutting a release" is the
+    kind of rule that gets forgotten exactly once. The linux job still builds
+    ON so the embedded path cannot rot.
+
+M10 -- Windows frontend DONE; macOS remains.
+    frontends/windows: Win32/GDI over the shared session. Differences from
+    the ADAM frontend it is modelled on, both deliberate:
+      - no pixel conversion. The session hands out XRGB8888, which is
+        byte-for-byte what a 32bpp BI_RGB DIB wants, so StretchDIBits reads
+        the session's buffer directly (ADAM expands RGB565 by hand).
+      - geometry is not fixed: the frame's own dimensions drive the letterbox,
+        because VidHD in slot 3 switches the core 560x384 <-> 640x400.
+    Keyboard is driven entirely from WM_KEYDOWN/WM_KEYUP, never WM_CHAR: the
+    core tracks Open/Closed Apple as HELD modifiers, so every key needs a
+    matching release and WM_CHAR has none. The printable character comes from
+    ToUnicode() with Ctrl masked OUT of the key state -- otherwise it folds
+    Ctrl in and returns a control code, and the mapping table wants the plain
+    character (it zeroes it for Ctrl combos itself, after deriving the
+    keycode). Flag bit 2 keeps ToUnicode from eating dead-key state.
+    WM_SYSCHAR is swallowed so Alt does not ding or open the menu bar (Alt is
+    Open/Closed Apple); Alt+F4 is let through explicitly. WM_KILLFOCUS lifts
+    both Apple keys -- releases go to the focused window, so Alt+Tab would
+    otherwise leave Open Apple stuck down.
+    The machine/video/slot menus are GENERATED from the option names the core
+    registers, so a card added upstream appears with no edit here.
+    Win32 debugger window: same shape as the GNOME/KDE ones over the same
+    engine, stop callback marshalled with PostMessage. A LISTBOX for the
+    disassembly (a click resolves to a row directly), 16 memory columns
+    rather than 8 -- the 8 elsewhere is a tiling-WM concession that does not
+    apply to a window that sets its own size.
+    Validated by cross-compiling (cmake/toolchains/mingw-w64.cmake) and
+    running under wine: boots to the //e banner, and the debugger shows
+    WAIT3/NXTA4/HEADR resolved from APPLE2E.SYM with the flag string and the
+    text-page ASCII column both correct.
+    NOTE: cross-compiling needs a Boost include dir containing NOTHING ELSE.
+    Passing /usr/include puts host glibc on the path as -isystem and the
+    build dies on conflicting ssize_t/time_t against mingw's corecrt; a
+    directory holding just a `boost` symlink is the fix.
+    This also turned up a REAL bug in core/CMakeLists.txt: AppleWin's minizip
+    includes "zlib.h" but its CMakeLists never adds ZLIB_INCLUDE_DIRS. Free
+    wherever zlib is on the default include path (Linux /usr/include, MSYS2
+    /ucrt64/include), fatal the moment it is not.
+    NOTE: the exe imports WSOCK32.dll (legacy Winsock 1.1) as well as
+    WS2_32 -- the CI import-table whitelist needs both.
+
+Next
+----
+M6  remaining: Apple II video views (text / lo-res / hi-res page decoders) to
+    replace adam's vdpview.c, and the corresponding panes in the three
+    debugger windows.
+M10 remaining: the macOS AppKit frontend (main.m, AppDelegate, DisplayView on
+    CVDisplayLink, DebuggerWindow) and its CI packaging. It cannot be built
+    locally -- the macOS CI job is the only verifier -- so keep the diff from
+    fujinet-go-adam-desktop/frontends/macos tight.
+Upstream to FujiNetWIFI/AppleWin: the SmartPort-over-SLIP listener is never
+    started by the libretro frontend, it binds 0.0.0.0 rather than loopback,
+    and Listener.cpp is missing <cstring> for MinGW. The first two silently
+    affect the Android port too.

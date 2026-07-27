@@ -17,3 +17,6 @@ tools/fujinet/work/
 .flatpak-builder/
 build-flatpak*/
 repo/
+
+# AppleWin writes this next to the working directory on startup.
+AppleWin.log

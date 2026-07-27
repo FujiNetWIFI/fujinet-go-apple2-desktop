@@ -8,19 +8,23 @@
 # repository gets. If that promise ever breaks, these jobs are what notices.
 #
 # The macOS and Windows jobs are the substitute for owning those machines.
-# Neither has a native frontend yet (they land with the AppKit and Win32
-# ports), so they build the core, the staged AppleWin tree and the FujiNet
-# runtime and run the test suite. That is the part with real portability
-# risk, and it is where these jobs have already paid for themselves: getting
-# Windows green needed a <cstring> include AppleWin was missing, a setenv()
-# shim, and not building the Win32-on-POSIX shim on Win32. Nothing had ever
-# compiled AppleWin's libretro frontend for MinGW before.
+# Windows now builds the native Win32 frontend and packages it; macOS still
+# builds only the core and the FujiNet runtime, until the AppKit frontend
+# lands. That is the part with real portability risk, and it is where these
+# jobs have already paid for themselves: getting Windows green needed a
+# <cstring> include AppleWin was missing, a setenv() shim, and not building
+# the Win32-on-POSIX shim on Win32. Nothing had ever compiled AppleWin's
+# libretro frontend for MinGW before.
 #
 # The flatpak job is the strictest test of the clone-and-build promise: the
 # sandbox has no network during the build, so anything the manifest does not
 # declare is simply absent.
 #
-# The release job lands with the rest of the packaging work.
+# EVERYTHING THIS WORKFLOW UPLOADS IS BUILT ROM-LESS (WITH_APPLE_ROMS=OFF).
+# The Apple II system ROMs are Apple copyrighted firmware; the packaging
+# path must fail safe, so the option's default is inverted here relative to
+# CMakeLists.txt. The linux job covers the ROMs-embedded build. The release
+# job attaches only these artifacts. See COMPLIANCE.md.
 
 name: CI
 
@@ -181,6 +185,7 @@ jobs:
             mingw-w64-ucrt-x86_64-expat
             mingw-w64-ucrt-x86_64-zlib
             mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-nsis
       # Static SDL3 (as on macOS) so nothing shipped needs a loose DLL --
       # not even SDL3.dll or the MinGW runtime.
       - name: Build and install static SDL3
@@ -193,14 +198,19 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/ucrt64
           cmake --build sdl3-src/build
           cmake --install sdl3-src/build
-      # No native frontend on Windows yet. This is the job with the real
-      # portability risk: AppleWin's libretro frontend has never been built
-      # under MinGW, and neither has FujiNet's IWM device tree
-      # (lib/device/iwm, lib/bus/iwm) -- expect a fresh set of portability
-      # gaps there, the way the ADAM target needed a `uint` spelling and a
-      # setenv() shim in its own device tree.
+      # This is the job with the real portability risk: neither AppleWin's
+      # libretro frontend nor FujiNet's IWM device tree (lib/device/iwm,
+      # lib/bus/iwm) had ever been built under MinGW before this repository
+      # did it. Before reaching here, Windows changes are cross-compiled with
+      # cmake/toolchains/mingw-w64.cmake and smoke-tested under wine.
+      #
+      # ROM-LESS on purpose: this job's output is uploaded and then attached
+      # to releases, and the Apple II system ROMs are Apple copyrighted
+      # firmware that must not be redistributed. The app ships the
+      # "Import System ROMs..." path for the user to supply their own. The
+      # linux job covers the WITH_APPLE_ROMS=ON build. See COMPLIANCE.md.
       - name: Configure
-        run: cmake -B build -G Ninja -DFRONTEND=none
+        run: cmake -B build -G Ninja -DFRONTEND=windows -DWITH_APPLE_ROMS=OFF
       - name: Build
         run: cmake --build build
       - name: Test
@@ -217,20 +227,61 @@ jobs:
       # target fujinet.dll shipped importing libcrypto-3-x64.dll and zlib1.dll
       # exactly this way -- the exe launched, LoadLibrary failed, and the
       # machine quietly ran with no FujiNet and no error anyone could see.
-      - name: Verify the FujiNet DLL is self-contained
+      - name: Verify the shipped binaries are self-contained
         run: |
-          DLL=tools/fujinet/work/out/fujinet.dll
-          echo "--- $DLL imports ---"
-          imports=$(objdump -p "$DLL" | sed -n 's/^\s*DLL Name: //p' | sort -u)
-          echo "$imports"
-          bad=$(echo "$imports" | grep -ivE \
-            '^(api-ms-win-[a-z0-9el-]+|kernel32|user32|gdi32|advapi32|shell32|ole32|oleaut32|comctl32|comdlg32|imm32|winmm|version|setupapi|dwmapi|ws2_32|iphlpapi|bcrypt|crypt32|secur32|netapi32|userenv|dbghelp|shlwapi|msvcrt|ucrtbase|rpcrt4|winspool|uxtheme|hid|cfgmgr32|powrprof|avrt|dxgi|d3d11|opengl32)\.dll$' \
-            || true)
-          if [ -n "$bad" ]; then
-            echo "::error::$DLL imports non-system DLLs that are not shipped:"
-            echo "$bad"
-            exit 1
-          fi
+          fail=0
+          for bin in build/frontends/windows/fujinet-go-apple2-windows.exe \
+                     tools/fujinet/work/out/fujinet.dll; do
+            test -f "$bin" || { echo "::error::$bin missing"; exit 1; }
+            echo "--- $bin imports ---"
+            imports=$(objdump -p "$bin" | sed -n 's/^\s*DLL Name: //p' | sort -u)
+            echo "$imports"
+            bad=$(echo "$imports" | grep -ivE \
+              '^(api-ms-win-[a-z0-9el-]+|kernel32|user32|gdi32|advapi32|shell32|ole32|oleaut32|comctl32|comdlg32|imm32|winmm|version|setupapi|dwmapi|ws2_32|wsock32|iphlpapi|bcrypt|crypt32|secur32|netapi32|userenv|dbghelp|shlwapi|msvcrt|ucrtbase|rpcrt4|winspool|uxtheme|hid|cfgmgr32|powrprof|avrt|dxgi|d3d11|opengl32)\.dll$' \
+              || true)
+            if [ -n "$bad" ]; then
+              echo "::error::$bin imports non-system DLLs that are not shipped:"
+              echo "$bad"
+              fail=1
+            fi
+          done
+          exit $fail
+      # The artifact is the folder you copy and run: the exe, fujinet.dll
+      # beside it (where the session looks first), and the pristine FujiNet
+      # runtime tree it provisions from on first start.
+      - name: Stage the app folder
+        run: |
+          mkdir -p dist/FujiNet-Go-Apple2/fujinet
+          cp build/frontends/windows/fujinet-go-apple2-windows.exe \
+             dist/FujiNet-Go-Apple2/
+          cp tools/fujinet/work/out/fujinet.dll dist/FujiNet-Go-Apple2/
+          cp tools/fujinet/work/out/fnconfig.ini dist/FujiNet-Go-Apple2/fujinet/
+          cp -r tools/fujinet/work/out/data tools/fujinet/work/out/SD \
+             dist/FujiNet-Go-Apple2/fujinet/
+      - name: Upload app folder
+        uses: actions/upload-artifact@v5
+        with:
+          name: FujiNet-Go-Apple2-windows
+          path: dist/FujiNet-Go-Apple2
+      # The installer packages the folder staged above, so the two Windows
+      # downloads are the same bits: one for people who want a Start Menu
+      # entry and an uninstaller, one for portable use.
+      - name: Build the installer
+        run: |
+          version=$(sed -n 's/^project(.*VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          makensis -V2 \
+            -DVERSION="$version" \
+            -DSRCDIR="$(cygpath -w "$PWD/dist/FujiNet-Go-Apple2")" \
+            -DOUTFILE="$(cygpath -w "$PWD/dist/FujiNet-Go-Apple2-Setup.exe")" \
+            -DAPPICON="$(cygpath -w "$PWD/frontends/windows/app.ico")" \
+            build-aux/windows/installer.nsi
+          test -f dist/FujiNet-Go-Apple2-Setup.exe \
+            || { echo "::error::installer not produced"; exit 1; }
+      - name: Upload installer
+        uses: actions/upload-artifact@v5
+        with:
+          name: FujiNet-Go-Apple2-windows-installer
+          path: dist/FujiNet-Go-Apple2-Setup.exe
 
   flatpak:
     runs-on: ubuntu-24.04
@@ -279,3 +330,73 @@ jobs:
         with:
           name: fujinet-go-apple2-${{ matrix.frontend }}-flatpak
           path: fujinet-go-apple2-${{ matrix.frontend }}.flatpak
+
+  # Publishing. Runs only for v* tags, and only once every platform has built
+  # and tested: the release carries exactly the binaries CI verified.
+  #
+  # Every artifact assembled here is built ROM-LESS -- see the WITH_APPLE_ROMS
+  # notes in the windows job and the flatpak manifests, and COMPLIANCE.md.
+  # Nothing published from this repository contains Apple firmware.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, windows, flatpak]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      # The version lives in CMakeLists.txt and the AppStream metainfo (which
+      # is where release notes belong). A tag that disagrees with them would
+      # ship packages whose About box contradicts the download, so stop here
+      # instead -- delete the tag, fix the version, tag again.
+      - name: Check the tag matches the declared version
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          project=$(sed -n 's/^project(.*VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          if [ "$tag" != "$project" ]; then
+            echo "::error::tag v$tag but CMakeLists.txt says $project"
+            exit 1
+          fi
+          for m in frontends/*/data/*.metainfo.xml; do
+            if ! grep -q "<release version=\"$tag\"" "$m"; then
+              echo "::error::$m has no <release version=\"$tag\"> entry"
+              exit 1
+            fi
+          done
+          echo "version $tag agrees across CMakeLists.txt and the metainfo"
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+      # download-artifact unpacks each artifact into its own directory, so
+      # the folder-shaped Windows one is re-zipped for the release page.
+      #
+      # No macOS asset yet: that frontend is not written, so the macos job
+      # builds and tests the core but produces nothing to ship. Add it here
+      # when frontends/macos lands.
+      - name: Assemble release assets
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          mkdir -p release
+          (cd artifacts/FujiNet-Go-Apple2-windows \
+           && zip -qr "../../release/FujiNet-Go-Apple2-${tag}-windows.zip" .)
+          cp "artifacts/FujiNet-Go-Apple2-windows-installer/FujiNet-Go-Apple2-Setup.exe" \
+             "release/FujiNet-Go-Apple2-${tag}-windows-setup.exe"
+          cp "artifacts/fujinet-go-apple2-gnome-flatpak/fujinet-go-apple2-gnome.flatpak" \
+             "release/FujiNet-Go-Apple2-${tag}-gnome.flatpak"
+          cp "artifacts/fujinet-go-apple2-kde-flatpak/fujinet-go-apple2-kde.flatpak" \
+             "release/FujiNet-Go-Apple2-${tag}-kde.flatpak"
+          ls -l release
+      # Creates the release when the tag was pushed on its own (as a draft, so
+      # the notes can be written before it goes out); when the release already
+      # exists -- made in the web UI -- it is left alone and only the assets
+      # are attached.
+      - name: Publish the assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --draft --generate-notes \
+              --title "FujiNet Go Apple II $tag"
+          fi
+          gh release upload "$tag" release/* --clobber

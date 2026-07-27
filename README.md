@@ -1,8 +1,8 @@
 # FujiNet Go Apple II — desktop
 
 A self-contained Apple II with FujiNet built in. One shared C session core
-plus native frontends: GTK4/libadwaita on GNOME and Qt6 Widgets on KDE, with
-AppKit (macOS) and Win32 (Windows) to come.
+plus native frontends: GTK4/libadwaita on GNOME, Qt6 Widgets on KDE and Win32
+on Windows, with AppKit (macOS) to come.
 
 Emulation is AppleWin's libretro core. FujiNet is not a subprocess: the
 firmware is built as a shared library, `dlopen`'d into the process, and joined
@@ -15,11 +15,12 @@ This is the second member of the FujiNet Go desktop family;
 is the model repository, and its `PORTING.md` is the specification this
 follows.
 
-> **Status: in progress.** The machine boots into FujiNet's CONFIG on both the
-> GNOME and KDE frontends, paced to display vsync, with keyboard and paddle
-> input, disk/ROM import, and a 6502 debugger engine. Linux and macOS are
-> green in CI. Still to come: the debugger windows, the macOS and Windows
-> frontends, and packaging. See `TODO`.
+> **Status: in progress.** The machine boots into FujiNet's CONFIG on the
+> GNOME, KDE and Windows frontends, paced to display vsync, with keyboard and
+> paddle input, disk/ROM import, and a 6502 debugger with its own window on
+> each. Linux, macOS, Windows and both flatpaks are green in CI, which also
+> builds the Windows installer and can cut a release. Still to come: the
+> macOS frontend and the Apple II video views in the debugger. See `TODO`.
 
 ## Building
 
@@ -46,7 +47,7 @@ them the FujiNet web UI opens in the system browser.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `FRONTEND` | `all` | `gnome`, `kde`, `all`, `none`. `all` considers only the host's viable frontends. |
+| `FRONTEND` | `all` | `gnome`, `kde`, `windows`, `all`, `none`. `all` considers only the host's viable frontends. |
 | `WITH_FUJINET` | `ON` | Build and embed the FujiNet runtime. |
 | `WITH_WEBVIEW` | `ON` | Embed the FujiNet web UI rather than opening a browser. |
 | `WITH_APPLE_ROMS` | `ON` | Embed the Apple II system ROMs. **See `COMPLIANCE.md` before distributing.** |
@@ -78,14 +79,24 @@ licensed.
   (`Apple2e_Enhanced.rom`, `DISK2.rom`, …). FujiNet still works with no ROMs
   at all — its SmartPort card firmware is not Apple's and stays embedded.
 
+**The packaging path inverts this default on purpose.** The flatpak manifests
+and the Windows CI job build with `WITH_APPLE_ROMS=OFF`, so nothing this
+repository uploads or attaches to a release contains Apple firmware. A local
+`flatpak-builder` run therefore also produces a ROM-less bundle; flip the one
+`-DWITH_APPLE_ROMS=` line in `build-aux/flatpak/*.yml` if you want a local
+flatpak that boots out of the box, and then keep it to yourself.
+
 Read `COMPLIANCE.md` before publishing anything.
 
 ## Keyboard
 
-Everything goes to the Apple II except **F10** (menu) and **F11**
-(fullscreen). In particular **Alt is not passed to the window manager** — the
-Alt keys are Open Apple and Closed Apple. On a Mac keyboard the Command keys
-work too.
+Everything goes to the Apple II except **F10** (menu), **F11** (fullscreen)
+and **F12** (debugger). In particular **Alt is not passed to the window
+manager** — the Alt keys are Open Apple and Closed Apple. On a Mac keyboard
+the Command keys work too.
+
+In the debugger: **F5** pause/continue, **F7** step into, **F8** step over,
+**Shift+F8** step out; click a disassembly line to toggle a breakpoint.
 
 ## Diagnostics
 
@@ -95,6 +106,31 @@ work too.
 | `APPLE2_ROM_DIR` | where a `WITH_APPLE_ROMS=OFF` build reads system ROMs |
 | `FUJINET_LIB` | explicit path to `libfujinet.so`/`.dylib`/`.dll` |
 | `FUJINET_WEBUI_BIND` | override the web admin bind address (default `127.0.0.1`) |
+
+## Packaging and releases
+
+| Platform | Artifact | Built by |
+|---|---|---|
+| Linux | `.flatpak` bundle, one per frontend | `build-aux/flatpak/online.fujinet.go.apple2.{gnome,kde}.yml` |
+| Windows | portable folder **and** an NSIS installer (per-user, no UAC) | the `windows` CI job + `build-aux/windows/installer.nsi` |
+
+The Windows frontend has no native host here, so it is developed by
+cross-compiling with `cmake/toolchains/mingw-w64.cmake` and smoke-testing
+under wine — the header of that file is the full recipe, including the
+zlib and Boost shims the cross sysroot lacks. CI then builds it natively
+under MSYS2/UCRT64 and checks the **import table** of both the `.exe` and
+`fujinet.dll` against a system-DLL whitelist (`objdump -p`, not `ldd`, which
+resolves against the build machine's `PATH` and will happily call a missing
+dependency satisfied).
+
+### Cutting a release
+
+The version lives in `project(... VERSION)` in `CMakeLists.txt` and nowhere
+else. Bump it, add a matching `<release version="…">` to every
+`frontends/*/data/*.metainfo.xml`, then push a `v<version>` tag. The release
+job refuses to publish if the tag, `CMakeLists.txt` and the metainfo disagree,
+and creates the release as a **draft** so the notes can be written before it
+goes out.
 
 ## Layout
 

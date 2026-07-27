@@ -45,6 +45,14 @@ include_directories("${AW}/source")
 # find_package results.
 find_package(ZLIB REQUIRED)
 
+# ...and put its headers on the include path for the same reason Boost's go on
+# below: AppleWin's minizip includes "zlib.h" but its CMakeLists never adds
+# ZLIB_INCLUDE_DIRS, which goes unnoticed wherever zlib lives in a default
+# include path (Linux /usr/include, MSYS2 /ucrt64/include) and fails the
+# moment it does not -- a cross build, or a zlib in a private prefix.
+# SYSTEM, so CMake drops it where it would have been redundant anyway.
+include_directories(SYSTEM ${ZLIB_INCLUDE_DIRS})
+
 # Boost is header-only for AppleWin's use (property_tree / algorithm-string /
 # multi_array in common2). Setting Boost_INCLUDE_DIRS here makes the staged
 # CMakeLists skip their own find_package(Boost).

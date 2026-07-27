@@ -32,7 +32,31 @@ This is controlled by the `WITH_APPLE_ROMS` CMake option:
   machine boots immediately. **An artifact built this way must not be
   publicly redistributed.** This is the development and local-use default.
 - **`OFF`** — build without the ROMs; the user supplies their own. This is
-  what the release job builds, and what any public download must be.
+  what any public download must be.
+
+### The packaging path inverts the default
+
+A CMake default is a convenience for whoever is at the keyboard; it is not a
+distribution policy, and "remember to pass `-DWITH_APPLE_ROMS=OFF` when you
+cut a release" is exactly the kind of rule that gets forgotten once. So every
+path that produces something for other people pins the option to `OFF` in the
+file that defines the artifact, not in the command that invokes it:
+
+| Path | Where `OFF` is set |
+|---|---|
+| GNOME flatpak | `build-aux/flatpak/online.fujinet.go.apple2.gnome.yml` |
+| KDE flatpak | `build-aux/flatpak/online.fujinet.go.apple2.kde.yml` |
+| Windows folder + installer | the `windows` job in `.github/workflows/ci.yml` |
+
+Those are the only artifacts CI uploads, and the release job attaches nothing
+else — so **nothing published from this repository contains Apple firmware**,
+and making that untrue takes a deliberate edit to a tracked file rather than
+an omission. The `linux` job still builds and tests `ON` so the embedded path
+cannot rot.
+
+The cost is that a local `flatpak-builder` run also yields a ROM-less bundle.
+That is the right way round: the failure mode is "the machine asks for ROMs",
+not "you have quietly shipped Apple's firmware to strangers".
 
 ### How `WITH_APPLE_ROMS=OFF` works
 

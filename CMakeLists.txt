@@ -19,7 +19,8 @@ endif()
 
 # Which native frontend(s) to build. Each is found-or-skipped so a lean
 # machine can still build the other one (or just the core + tests).
-set(FRONTEND "all" CACHE STRING "Frontend to build: gnome, kde, all, none")
+set(FRONTEND "all" CACHE STRING
+    "Frontend to build: gnome, kde, macos, windows, all, none")
 option(WITH_WEBVIEW "Embed the FujiNet web UI (WebKitGTK / QtWebEngine)" ON)
 
 # The Apple II monitor/Applesoft/Disk ][ ROMs are Apple copyrighted firmware
@@ -64,8 +65,17 @@ endif()
 if(FRONTEND STREQUAL "kde" OR (FRONTEND STREQUAL "all" AND UNIX AND NOT APPLE))
   add_subdirectory(frontends/kde)
 endif()
+# The AppKit frontend is not written yet. Guarded by EXISTS so configuring on
+# a Mac with the default FRONTEND=all says so plainly instead of failing on a
+# missing add_subdirectory; drop the guard once frontends/macos lands.
 if(FRONTEND STREQUAL "macos" OR (FRONTEND STREQUAL "all" AND APPLE))
-  add_subdirectory(frontends/macos)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/frontends/macos/CMakeLists.txt")
+    add_subdirectory(frontends/macos)
+  elseif(FRONTEND STREQUAL "macos")
+    message(FATAL_ERROR "The macOS frontend is not implemented yet.")
+  else()
+    message(STATUS "No macOS frontend yet: building the core only.")
+  endif()
 endif()
 if(FRONTEND STREQUAL "windows" OR (FRONTEND STREQUAL "all" AND WIN32))
   add_subdirectory(frontends/windows)
