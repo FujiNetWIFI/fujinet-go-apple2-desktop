@@ -85,16 +85,33 @@ the ROM directory under their own names (AppleWin looks them up by exact
 filename) and restarts the session. Without any ROMs the app reports what is
 missing and where to put it, rather than showing a black screen.
 
-**This is enforced, not just documented.** The `no_embedded_roms` ctest takes a
-distinctive slice of every firmware image in the staged resource directory and
-greps the built binary for it; a ROM that gets compiled in despite the option
-fails the build. It registers only in the configuration it describes.
+**This is enforced, not just documented.** The `no_embedded_roms_*` ctests take
+a distinctive slice of every firmware image in the staged resource directory
+and grep a built binary for it; a ROM that gets compiled in despite the option
+fails the build. They register only in the configuration they describe, and
+there is one per binary — `boot_smoke` plus **every frontend executable that
+was built**, which is what actually ships.
 
-Since the packaging path pins `WITH_APPLE_ROMS=OFF`, that test now runs in
-three CI jobs — `linux` (its dedicated ROM-less build), `macos` and `windows`
-— and in the latter two it runs against **the very binaries that get uploaded
-and attached to a release**. The claim at the top of this file is therefore
-checked by machine on the artifacts themselves, not asserted about them.
+Since the packaging path pins `WITH_APPLE_ROMS=OFF`, these run in three CI
+jobs — `linux` (its dedicated ROM-less build), `macos` and `windows` — so on
+the latter two they cover the executable that gets uploaded and attached to a
+release.
+
+Two things this got wrong at first, both worth remembering:
+
+- It checked only the `boot_smoke` test binary. That is a poor stand-in for
+  the thing whose contents actually matter, and it linked differently enough
+  to hide the next problem.
+- The "distinctive slice" only rejected chunks that were mostly **zero**. One
+  ROM (`TK3000e.rom`) begins with 16KB of `0xFF`, and a 64-byte run of `0xFF`
+  occurs in almost any sizeable binary — so the probe matched everywhere. It
+  went unseen precisely because the small test binary had no such run. The
+  probe now rejects any slice dominated by a single byte value, requires real
+  variety, and scans the whole file; a ROM with nothing distinctive to search
+  for is **reported as unchecked** rather than silently counted as passing.
+
+Verified in both directions: the check passes on the shipped ROM-less
+artifacts and fails loudly on a `WITH_APPLE_ROMS=ON` build.
 
 ## Deliberate choices
 

@@ -271,9 +271,8 @@ set_tests_properties(boot_smoke debug_seam debug_engine video
 # Apple (or third-party card) firmware compiled into it. Only meaningful for
 # the configuration it describes.
 if(NOT WITH_APPLE_ROMS)
-  add_test(NAME no_embedded_roms
-           COMMAND "${Python3_EXECUTABLE}"
-                   "${CMAKE_CURRENT_SOURCE_DIR}/tests/no_embedded_roms.py"
-                   "$<TARGET_FILE:boot_smoke>"
-                   "${AW}/resource")
+  # Registered at the TOP level instead, so it can also be pointed at the
+  # frontend executables -- those are the artifacts that actually ship, and
+  # they are not known in this scope. See the end of the top-level
+  # CMakeLists.txt.
 endif()

@@ -22,11 +22,31 @@ PROBE = 64
 
 
 def probe_bytes(data):
-    """A slice unlikely to be all padding."""
-    for start in (32, len(data) // 2, len(data) // 4):
+    """A slice distinctive enough that finding it means something.
+
+    The first version of this only rejected chunks that were mostly ZERO,
+    which let a run of 0xFF through -- and TK3000e.rom starts with 16KB of
+    0xFF padding. A 64-byte run of 0xFF occurs in almost any binary of a
+    reasonable size, so the test reported that ROM as embedded in artifacts
+    that did not contain it. It went unnoticed because the small test binary
+    it runs against happens to have no such run, while the shipped frontends
+    do.
+
+    So: reject any chunk dominated by a single byte value, require real
+    variety, and scan the whole file rather than three fixed offsets.
+    """
+    max_run = PROBE // 2      # no single byte value may cover half the slice
+    min_distinct = 12
+
+    for start in range(0, max(1, len(data) - PROBE), PROBE):
         chunk = data[start:start + PROBE]
-        if len(chunk) == PROBE and chunk.count(0) <= PROBE - 8:
-            return chunk
+        if len(chunk) != PROBE:
+            continue
+        if max(chunk.count(b) for b in set(chunk)) > max_run:
+            continue
+        if len(set(chunk)) < min_distinct:
+            continue
+        return chunk
     return None
 
 
@@ -39,6 +59,7 @@ def main():
     checked = 0
     leaked = []
     missing_expected = []
+    unprobeable = []
 
     for f in sorted(resdir.iterdir()):
         if not f.is_file() or f.suffix.lower() not in (".rom", ".bin"):
@@ -48,6 +69,9 @@ def main():
             continue
         chunk = probe_bytes(data)
         if chunk is None:
+            # Nothing distinctive enough to search for -- report it rather
+            # than quietly treating it as checked.
+            unprobeable.append(f.name)
             continue
         checked += 1
         present = chunk in binary
@@ -68,6 +92,9 @@ def main():
 
     if leaked or missing_expected:
         return 1
+    if unprobeable:
+        print("no_embedded_roms: NOT checked (no distinctive slice): "
+              + ", ".join(sorted(unprobeable)))
     print(f"no_embedded_roms: {checked} firmware images checked; "
           f"only {', '.join(sorted(EXPECTED_PRESENT))} embedded, as intended")
     return 0

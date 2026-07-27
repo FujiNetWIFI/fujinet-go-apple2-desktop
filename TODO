@@ -356,6 +356,32 @@ M10 macOS: WRITTEN, verified only by the macOS CI job -- there is no Mac here.
     The bundle is UNSIGNED; Gatekeeper blocks it on first launch. Signing and
     notarisation want an Apple Developer identity in the repo secrets --
     fujinet-go-adam-desktop's macos job has the step to copy when one exists.
+Findings from dry-running the release path (nothing had ever exercised it)
+-------------------------------------------------------------------------
+Downloaded the real CI artifacts and ran the release job's assembly commands
+against them: PASS, all five assets land. Worth keeping as a habit before any
+tag -- the release job only runs on a v* tag, so otherwise its first execution
+is the one that matters.
+
+That dry run then turned up a REAL BUG in no_embedded_roms.py, the test that
+makes the COMPLIANCE.md claim checkable:
+  * The "distinctive slice" only rejected chunks that were mostly ZERO.
+    TK3000e.rom opens with 16KB of 0xFF, and a 64-byte run of 0xFF occurs in
+    almost any sizeable binary -- so the probe matched everywhere and reported
+    a ROM as embedded in artifacts that did not contain it.
+  * It went unseen because the test ran against boot_smoke ONLY, a small
+    binary with no such run. The shipped frontends have one.
+  Fixed: the probe rejects any slice dominated by one byte value, requires
+  real variety, scans the whole file, and REPORTS a ROM it cannot probe
+  distinctively instead of silently counting it as checked. The test is now
+  registered once per binary -- boot_smoke plus every frontend executable
+  built -- so it covers what actually ships.
+  Verified both directions: passes on the shipped ROM-less artifacts, fails
+  loudly on a WITH_APPLE_ROMS=ON build.
+  LESSON: a test whose only subject is a test binary is not testing the
+  product, and a "is this needle in the haystack" check is worthless until
+  you have confirmed the needle is not itself hay.
+
 Upstream to FujiNetWIFI/AppleWin -- FOUR fixes, not three as earlier notes
     said (the audio one belongs on the list too):
       1. the SmartPort-over-SLIP listener is never started by the libretro

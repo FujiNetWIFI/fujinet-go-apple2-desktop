@@ -72,6 +72,30 @@ if(FRONTEND STREQUAL "windows" OR (FRONTEND STREQUAL "all" AND WIN32))
   add_subdirectory(frontends/windows)
 endif()
 
+# The ROM-less claim, checked on every binary that ships.
+#
+# This used to run against the boot_smoke test binary alone. That is a poor
+# stand-in: the thing whose contents matter is the executable a user
+# downloads, and it links differently. It also hid a bug -- the probe slice
+# for one ROM was 64 bytes of 0xFF padding, which occurs in almost any large
+# binary but not in the small test one, so the test would have reported a
+# false leak the moment it was pointed anywhere real.
+if(NOT WITH_APPLE_ROMS)
+  set(APPLE2_ROM_CHECK_TARGETS boot_smoke)
+  foreach(_fe gnome kde macos windows)
+    if(TARGET fujinet-go-apple2-${_fe})
+      list(APPEND APPLE2_ROM_CHECK_TARGETS fujinet-go-apple2-${_fe})
+    endif()
+  endforeach()
+  foreach(_t IN LISTS APPLE2_ROM_CHECK_TARGETS)
+    add_test(NAME no_embedded_roms_${_t}
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CMAKE_SOURCE_DIR}/core/tests/no_embedded_roms.py"
+                     "$<TARGET_FILE:${_t}>"
+                     "${CMAKE_SOURCE_DIR}/core/applewin-generated/resource")
+  endforeach()
+endif()
+
 # Application icons (rendered from the Android app's launcher art by
 # tools/icons/make-icons.py). Desktop environments look the icon up by the
 # desktop-entry id, so the same art is installed under each frontend's id --
