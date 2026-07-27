@@ -191,6 +191,7 @@ add_library(apple2session STATIC
   src/fujinet_runtime.c
   debugger/m6502dasm.c
   debugger/debugger.c
+  debugger/a2video.c
 )
 
 target_include_directories(apple2session
@@ -250,6 +251,9 @@ target_link_libraries(debug_seam_test apple2session)
 add_executable(debug_engine_test tests/debug_engine_test.c)
 target_link_libraries(debug_engine_test apple2session)
 
+add_executable(video_test tests/video_test.c)
+target_link_libraries(video_test apple2session)
+
 add_executable(dasm_test tests/dasm_test.c)
 target_link_libraries(dasm_test apple2session)
 target_include_directories(dasm_test PRIVATE debugger)
@@ -259,7 +263,8 @@ add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME debug_seam COMMAND debug_seam_test)
 add_test(NAME debug_engine COMMAND debug_engine_test)
-set_tests_properties(boot_smoke debug_seam debug_engine
+add_test(NAME video COMMAND video_test)
+set_tests_properties(boot_smoke debug_seam debug_engine video
                      PROPERTIES SKIP_RETURN_CODE 77)
 
 # Makes the COMPLIANCE.md claim checkable: a ROM-less build must not have any

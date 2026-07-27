@@ -119,6 +119,45 @@ void apple2debug_write_mem(apple2debug *d, uint16_t addr, const uint8_t *in,
 int apple2debug_disassemble(apple2debug *d, uint16_t addr, int count,
                             apple2dasm_line *out, uint16_t *next_addr);
 
+/* ---- video views ---------------------------------------------------------
+ * Decode a page of Apple II video memory into pixels for a frontend to show
+ * -- the Apple II equivalent of the ADAM target's VDP visualizers, and the
+ * same contract: a fixed output size, rendered into the caller's buffer.
+ *
+ * These read through the debugger's memory accessor, so they show what the
+ * CPU sees RIGHT NOW at a given page. That is deliberately not the same
+ * thing as what the video hardware is scanning out (soft switches decide
+ * that, and the session's own frame is the authority) -- it is a memory
+ * inspector, which is what makes it useful for finding the page a program is
+ * drawing into before it flips to it. */
+#define APPLE2VIEW_WIDTH  280
+#define APPLE2VIEW_HEIGHT 192
+
+typedef enum {
+    APPLE2VIEW_TEXT_1 = 0,
+    APPLE2VIEW_TEXT_2,
+    APPLE2VIEW_LORES_1,
+    APPLE2VIEW_LORES_2,
+    APPLE2VIEW_HIRES_1,
+    APPLE2VIEW_HIRES_2,
+    APPLE2VIEW_COUNT
+} apple2debug_view;
+
+/* Menu label for a view, or NULL past the end -- so a frontend can walk
+ * idx = 0.. until NULL, as it does for the machine options. */
+const char *apple2debug_view_name(int idx);
+
+/* The base address a view decodes, for a frontend that wants to show it. */
+uint16_t apple2debug_view_base(apple2debug_view view);
+
+/* Renders view into dst, which must hold APPLE2VIEW_WIDTH *
+ * APPLE2VIEW_HEIGHT uint32 (XRGB8888, tightly packed -- the same pixel
+ * format apple2session_copy_frame produces, so a frontend paints it exactly
+ * the way it paints the machine's own screen). Returns 0 on success, -1 for
+ * an unknown view. */
+int apple2debug_render_view(apple2debug *d, apple2debug_view view,
+                            uint32_t *dst);
+
 /* ---- symbols -------------------------------------------------------------
  * AppleWin ships APPLE2E.SYM / A2_BASIC.SYM / A2_DOS33.SYM2, which the
  * staging step already copies into the tree -- so unlike the ADAM target
