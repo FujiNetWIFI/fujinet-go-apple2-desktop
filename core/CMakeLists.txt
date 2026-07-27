@@ -43,6 +43,17 @@ include_directories("${AW}/source")
 # zlib: resolved here, in the scope that is the *parent* of every AppleWin
 # subdirectory, because sibling subdirectories do not see each other's
 # find_package results.
+if(WIN32)
+  # Windows has no system zlib, so whatever is linked has to ship alongside
+  # the exe -- and MSYS2's zlib package provides both a static library and an
+  # import library for zlib1.dll, of which FindZLIB prefers the latter. That
+  # put zlib1.dll in the exe's import table, which is a DLL the target machine
+  # does not have and a launch failure with no error anyone can see. (Found by
+  # the import-table check in the windows CI job, which is what it is for.)
+  #
+  # Needs CMake >= 3.24; on older ones it is ignored and the DLL comes back.
+  set(ZLIB_USE_STATIC_LIBS ON)
+endif()
 find_package(ZLIB REQUIRED)
 
 # ...and put its headers on the include path for the same reason Boost's go on
