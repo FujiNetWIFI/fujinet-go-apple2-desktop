@@ -268,6 +268,23 @@ def apply_all(root):
         ),
     ])
 
+    # -- MinGW portability: std::memcpy needs <cstring> ---------------------
+    # Both SmartPort files call std::memcpy without including <cstring>. On
+    # Linux and macOS it arrives transitively through libstdc++'s headers; on
+    # MinGW it does not, and the build fails with "'memcpy' is not a member of
+    # 'std'". PORTING.md predicts exactly this class of gap for a target whose
+    # device tree has never been compiled for Windows.
+    #
+    # Send this upstream to FujiNetWIFI/AppleWin.
+    for _f in ("source/SmartPortOverSlip.cpp", "source/DummySmartport.cpp"):
+        patch(root, _f, [
+            (
+                "#include <iomanip>\n",
+                "#include <iomanip>\n"
+                "#include <cstring> // [fujinet-go-apple2-desktop] std::memcpy on MinGW\n",
+            ),
+        ])
+
     # -- 14: bind the SLIP listener to loopback, not every interface --------
     # Upstream defaults to 0.0.0.0, which for a desktop app means the Apple
     # II's SmartPort bus -- an unauthenticated block-device channel -- is

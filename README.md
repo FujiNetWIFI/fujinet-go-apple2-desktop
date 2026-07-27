@@ -1,8 +1,8 @@
 # FujiNet Go Apple II — desktop
 
 A self-contained Apple II with FujiNet built in. One shared C session core
-plus native frontends: GTK4/libadwaita on GNOME, and (to come) Qt6 Widgets on
-KDE, AppKit on macOS, Win32 on Windows.
+plus native frontends: GTK4/libadwaita on GNOME and Qt6 Widgets on KDE, with
+AppKit (macOS) and Win32 (Windows) to come.
 
 Emulation is AppleWin's libretro core. FujiNet is not a subprocess: the
 firmware is built as a shared library, `dlopen`'d into the process, and joined
@@ -15,10 +15,11 @@ This is the second member of the FujiNet Go desktop family;
 is the model repository, and its `PORTING.md` is the specification this
 follows.
 
-> **Status: in progress.** The machine boots into FujiNet's CONFIG, paced to
-> display vsync, with keyboard and paddle input and disk/ROM import. Still to
-> come: the KDE, macOS and Windows frontends, the 6502 debugger, CI and
-> packaging. See `TODO`.
+> **Status: in progress.** The machine boots into FujiNet's CONFIG on both the
+> GNOME and KDE frontends, paced to display vsync, with keyboard and paddle
+> input, disk/ROM import, and a 6502 debugger engine. Linux and macOS are
+> green in CI. Still to come: the debugger windows, the macOS and Windows
+> frontends, and packaging. See `TODO`.
 
 ## Building
 
