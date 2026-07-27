@@ -65,9 +65,6 @@ distinctive slice of every firmware image in the staged resource directory and
 greps the built binary for it; a ROM that gets compiled in despite the option
 fails the build. It runs only in the configuration it describes.
 
-`spoverslip.bin`, the SmartPort-over-SLIP card firmware, is part of the
-FujiNetWIFI AppleWin fork and is *not* affected by the above.
-
 ## Deliberate choices
 
 - **The 6502/65C02 disassembler is written fresh** rather than reused from
@@ -88,17 +85,30 @@ FujiNetWIFI AppleWin fork and is *not* affected by the above.
 
 ## Patches carried against AppleWin
 
-Applied at staging time by `tools/applewin/patch-staged-tree.py`. Three are
-genuine upstream bug fixes and should be sent to `FujiNetWIFI/AppleWin`
-rather than carried indefinitely:
+Applied at staging time by `tools/applewin/patch-staged-tree.py`. These are
+genuine fixes and gaps, not local preferences, and should be sent to
+`FujiNetWIFI/AppleWin` rather than carried indefinitely:
 
+- `SmartPortOverSlip.cpp` — **the libretro frontend never starts the SLIP
+  listener at all.** Upstream starts it from `LoadConfiguration()` and from
+  the Windows property sheet, and the libretro path reaches neither; the
+  card's constructor only logs. FujiNet dials forever and nothing answers.
+  Starting it from the card constructor is right regardless of frontend:
+  inserting the card is when its listener should come up.
+- `devrelay/service/Listener.h` — the listener binds `0.0.0.0` by default,
+  putting an unauthenticated block-device channel on the network. Bound to
+  loopback instead; it has to be the *default* that changes, because
+  `LoadConfiguration()` re-initialises from it.
 - `devrelay/service/Listener.cpp` — `start()`/`stop()` mishandle the listener
   thread across emulator re-inits, calling `std::terminate` on the second
   machine-type change.
 - `frontends/libretro/rdirectsound.cpp` — a sample-doubling bug on every
   ring-buffer wrap (an audible ~2.7 Hz "gallop").
 - `frontends/libretro/retroregistry.cpp` — exposing the SmartPort-over-SLIP
-  card in the slot 5 and slot 7 core options.
+  card in the slot 5 and slot 7 core options, and adding a `slot6` option at
+  all (upstream has none, and `CardManager`'s constructor hard-inserts a
+  Disk ][ there).
 
 The remainder are build-integration edits (building as a subdirectory,
-resolving zlib/Boost our way) with no behavioural effect.
+resolving zlib/Boost our way, skipping libslirp/libpcap) with no behavioural
+effect.

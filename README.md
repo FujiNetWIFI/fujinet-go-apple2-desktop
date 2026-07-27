@@ -15,9 +15,10 @@ This is the second member of the FujiNet Go desktop family;
 is the model repository, and its `PORTING.md` is the specification this
 follows.
 
-> **Status: in progress.** The emulator half is up — the machine boots, is
-> paced to display vsync, and takes keyboard input. The FujiNet runtime is
-> the next milestone. See `TODO`.
+> **Status: in progress.** The machine boots into FujiNet's CONFIG, paced to
+> display vsync, with keyboard and paddle input and disk/ROM import. Still to
+> come: the KDE, macOS and Windows frontends, the 6502 debugger, CI and
+> packaging. See `TODO`.
 
 ## Building
 
