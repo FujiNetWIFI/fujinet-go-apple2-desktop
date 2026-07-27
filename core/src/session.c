@@ -251,11 +251,24 @@ static void *emu_thread_main(void *arg)
     apple2host_set_log_sink(core_log_sink, s);
     apple2host_set_frame_sink(on_core_frame, s);
 
-    if (!apple2host_core_start()) {
-        session_set_error(s, "the AppleWin core failed to start");
-        apple2host_set_frame_sink(NULL, NULL);
-        s->running = 0;
-        return NULL;
+    {
+        int ok = apple2host_core_start();
+        if (!ok) {
+            session_set_error(s, "the AppleWin core failed to start");
+            apple2host_set_frame_sink(NULL, NULL);
+        }
+        /* Publish the result either way: apple2session_start is blocked on
+         * this, and a failed core must not leave it waiting. By the time
+         * core_start returns, AppleWin has inserted the slot cards -- so the
+         * SmartPort listener is bound and FujiNet can be started. */
+        pthread_mutex_lock(&s->start_mtx);
+        s->core_started = ok ? 1 : -1;
+        pthread_cond_broadcast(&s->start_cv);
+        pthread_mutex_unlock(&s->start_mtx);
+        if (!ok) {
+            s->running = 0;
+            return NULL;
+        }
     }
 
     /* Pace from what the core actually declares rather than a hard-coded
@@ -352,7 +365,9 @@ apple2session *apple2session_new(const apple2session_paths *paths)
     pthread_mutex_init(&s->lifecycle_mtx, NULL);
     pthread_mutex_init(&s->frame_mtx, NULL);
     pthread_mutex_init(&s->vs_mtx, NULL);
+    pthread_mutex_init(&s->start_mtx, NULL);
     apple2_cond_init_monotonic(&s->vs_cv);
+    apple2_cond_init_monotonic(&s->start_cv);
 
     settings_init(s);
     return s;
@@ -367,7 +382,9 @@ void apple2session_free(apple2session *s)
     pthread_mutex_destroy(&s->lifecycle_mtx);
     pthread_mutex_destroy(&s->frame_mtx);
     pthread_mutex_destroy(&s->vs_mtx);
+    pthread_mutex_destroy(&s->start_mtx);
     pthread_cond_destroy(&s->vs_cv);
+    pthread_cond_destroy(&s->start_cv);
     free(s->frame);
     free(s);
 }
@@ -429,13 +446,6 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
     s->opts.slot7 = s->opt_slot7;
     s->opts.video_mode = s->opt_video_mode;
 
-    /* FujiNet first: AppleWin's SmartPort listener is what FujiNet dials
-     * into, and FujiNet's client retries, so the ordering is forgiving
-     * either way. A missing runtime is not fatal -- the machine still boots,
-     * just without the FujiNet drive. */
-    if (opts->enable_fujinet)
-        fujinet_start(s);
-
     s->stop_flag = 0;
     s->reset_request = 0;
     s->frame_serial = 0;
@@ -444,15 +454,60 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
     s->vs_ns = 0;
     s->vs_seen_ns = 0;
     s->vs_iv_us = 0;
+    s->core_started = 0;
     s->running = 1;
     if (pthread_create(&s->emu_thread, NULL, emu_thread_main, s) != 0) {
         s->running = 0;
-        fujinet_stop(s);
         session_set_error(s, "could not start the emulator thread");
         pthread_mutex_unlock(&s->lifecycle_mtx);
         return -1;
     }
     s->emu_thread_started = 1;
+
+    /* THE EMULATOR MUST BE UP BEFORE FUJINET.
+     *
+     * This is the opposite of the ADAM target's order, and the difference is
+     * not cosmetic. On ADAM the FujiNet BoIP client retries in the background
+     * and start_runtime returns immediately, so either order works. Here,
+     * FujiNet's APPLE build blocks inside its setup (iwm_slip::setup_spi)
+     * until the SmartPort/SLIP connection is made -- so starting it first
+     * deadlocks the whole session: start_runtime never returns, the emulator
+     * thread is never created, AppleWin never binds the listener, and FujiNet
+     * waits for a connection that nothing will ever accept. The Android app
+     * starts the emulator first for this same reason.
+     *
+     * Wait for the core to report itself up (AppleWin inserts the slot cards
+     * during core_start, which is what binds the listener), then start
+     * FujiNet. The wait is bounded so a wedged core cannot hang the caller. */
+    if (opts->enable_fujinet) {
+        int up;
+        pthread_mutex_lock(&s->start_mtx);
+        while (s->core_started == 0) {
+            if (apple2_cond_timedwait_ms(&s->start_cv, &s->start_mtx, 15000)
+                == ETIMEDOUT)
+                break;
+        }
+        up = s->core_started;
+        pthread_mutex_unlock(&s->start_mtx);
+
+        if (up == 1) {
+            /* A missing or broken runtime is not fatal: the machine still
+             * boots, just with no FujiNet device on the bus. */
+            if (fujinet_start(s) == 0) {
+                /* The Apple II finishes its boot-slot scan in about a second,
+                 * long before FujiNet has finished connecting -- so it finds
+                 * no SmartPort device and falls through to whatever is in a
+                 * lower slot. fujinet_start only returns once the runtime is
+                 * up and its SLIP client has attached, so this is exactly the
+                 * moment to restart the machine and let the //e autostart ROM
+                 * find the device this time. */
+                s->reset_request = 2; /* cold: re-runs the boot scan */
+            }
+        } else {
+            fprintf(stderr, "apple2session: emulator core did not come up; "
+                            "starting without FujiNet\n");
+        }
+    }
 
     if (opts->enable_audio)
         audio_start(s);
@@ -471,6 +526,10 @@ void apple2session_stop(apple2session *s)
         return;
     }
     s->stop_flag = 1;
+    pthread_mutex_lock(&s->start_mtx);
+    if (s->core_started == 0) s->core_started = -1;
+    pthread_cond_broadcast(&s->start_cv);
+    pthread_mutex_unlock(&s->start_mtx);
     pthread_mutex_lock(&s->vs_mtx);
     pthread_cond_broadcast(&s->vs_cv);
     pthread_mutex_unlock(&s->vs_mtx);

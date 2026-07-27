@@ -214,7 +214,59 @@ def apply_all(root):
         ),
     ])
 
-    # -- 13: sample-doubling bug in the libretro speaker mixer --------------
+    # -- 13: start the SmartPort-over-SLIP listener when the card is inserted
+    # THIS IS THE PATCH THAT MAKES FUJINET WORK AT ALL.
+    #
+    # Nothing in the libretro frontend ever starts the listener. Upstream it
+    # is started from LoadConfiguration() (source/Utilities.cpp) and from the
+    # Windows property sheet -- and the libretro frontend calls neither: it
+    # builds its own registry and machine, so LoadConfiguration() is dead code
+    # here. The card's own constructor only logs. The result is that FujiNet
+    # dials 127.0.0.1:1985 forever and nothing ever answers.
+    #
+    # Starting it from the card constructor is the right place regardless of
+    # frontend: inserting the card is exactly when its listener should come
+    # up, and patch 8/9 above already makes start() safe to call over a
+    # previous listener (machine-type changes re-insert the card).
+    #
+    # Send this upstream to FujiNetWIFI/AppleWin.
+    patch(root, "source/SmartPortOverSlip.cpp", [
+        (
+            '\tLogFileOutput("SmartPortOverSlip ctor, slot: %d\\n", slot);',
+            '\tLogFileOutput("SmartPortOverSlip ctor, slot: %d\\n", slot);\n'
+            '\n'
+            '\t// [fujinet-go-apple2-desktop] Bring the SLIP listener up with the\n'
+            '\t// card. The libretro frontend never calls LoadConfiguration(),\n'
+            '\t// which is where upstream starts it, so without this nothing ever\n'
+            '\t// listens and FujiNet retries forever.\n'
+            '\tauto &listener = GetCommandListener();\n'
+            '\tlistener.Initialize(listener.default_listener_address,\n'
+            '\t                    listener.default_port,\n'
+            '\t                    listener.default_response_timeout);\n'
+            '\tlistener.set_start_on_init(true);\n'
+            '\tlistener.start();',
+        ),
+    ])
+
+    # -- 14: bind the SLIP listener to loopback, not every interface --------
+    # Upstream defaults to 0.0.0.0, which for a desktop app means the Apple
+    # II's SmartPort bus -- an unauthenticated block-device channel -- is
+    # reachable from the network. Our FujiNet runtime lives in this same
+    # process and connects over loopback, so there is nothing to gain by
+    # listening more widely.
+    #
+    # It has to be the DEFAULT that changes, not just the Initialize() call
+    # above: LoadConfiguration() re-initialises the listener from this same
+    # default when the registry carries no address (which it never does in the
+    # libretro frontend), and whichever runs last wins.
+    patch(root, "source/devrelay/service/Listener.h", [
+        (
+            '\tstd::string default_listener_address = "0.0.0.0";',
+            '\tstd::string default_listener_address = "127.0.0.1";',
+        ),
+    ])
+
+    # -- 15: sample-doubling bug in the libretro speaker mixer --------------
     # When a generator's ring-buffer Read wraps it returns two segments;
     # writeAudio mixes them with two mixBuffer() calls, but `ptr` is passed by
     # value so the second (wrapped) segment is written back at buffer.data()

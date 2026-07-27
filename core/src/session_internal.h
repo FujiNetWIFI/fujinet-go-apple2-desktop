@@ -69,6 +69,13 @@ struct apple2session {
      * touch core state that retro_run owns. */
     volatile int reset_request;
 
+    /* Handshake: the emulator thread publishes whether the core came up, so
+     * apple2session_start can wait for AppleWin's SmartPort listener to be
+     * bound before it starts FujiNet. 0 = pending, 1 = up, -1 = failed. */
+    pthread_mutex_t start_mtx;
+    pthread_cond_t start_cv;
+    int core_started;
+
     /* ---- latest-frame store (emulator thread -> UI thread) ----
      * Sized for the largest geometry the core can produce; frame_w/frame_h
      * say how much of it is live, and change at runtime when a VidHD card is

@@ -66,25 +66,68 @@ Findings worth remembering
   machine's -- it leaves the output untouched when the debugger is inactive.
   Use Video::GetVideoMode() via GetVideo() to read the real one.
 
+M2 -- clone-and-build verified two ways:
+  * a plain `git clone` (no --recurse-submodules) auto-fetches the submodules
+    and builds; ctest green.
+  * a tree with .git and third_party/* removed takes the clone-the-pin branch
+    of apple2_provide_dependency and builds; ctest green.
+
+M3 -- FujiNet in-process. THE BUS IS UP; CONFIG DOES NOT BOOT YET.
+
+  Working:
+  * tools/fujinet/build-fujinet-desktop.sh forked from adam's, PC_TARGET=APPLE,
+    [BOIP] port=1985, web UI 8000. All 11 target-independent patch blocks kept;
+    the two ADAM portability patches replaced by the two APPLE ones
+    (fnFsSPIFFS.cpp + mgHttpClient.cpp root their paths absolutely from
+    FUJINET_RUNTIME_ROOT, because AppleWin's SetCurrentImageDir() chdir()s and
+    moves the shared process CWD out from under FujiNet). Builds first try.
+  * libfujinet.so exports exactly the six-symbol contract, 8 symbols total --
+    the ELF version script is doing its job.
+  * The runtime loads in-process, mounts SPIFFS and SD from absolute paths,
+    reads our fnconfig.ini, mounts /autorun.po, and attaches to the bus.
+  * SmartPort/SLIP is live: LISTEN 127.0.0.1:1985 plus an ESTABLISHED pair
+    whose BOTH endpoints belong to our own PID, with iwm_slip::encode_packet
+    traffic and "handling init command" / "Sending INIT Response Packet".
+
+  Two real defects found and fixed along the way:
+  * The AppleWin libretro frontend NEVER STARTS THE SLIP LISTENER. Upstream
+    starts it in LoadConfiguration() and in the Windows property sheet; the
+    libretro path reaches neither, and the card ctor only logs. FujiNet dials
+    forever and nothing answers. Staging patch 13 starts it from the
+    SmartPortOverSlip constructor -- inserting the card is when its listener
+    should come up, and patch 8/9 already makes start() safe over a previous
+    listener. Patch 14 changes default_listener_address to 127.0.0.1: upstream
+    binds 0.0.0.0, which exposes an unauthenticated block-device channel to
+    the network, and the default is what LoadConfiguration re-initialises from.
+    BOTH BELONG UPSTREAM.
+  * Startup order is the OPPOSITE of ADAM's, and it is not cosmetic. FujiNet's
+    APPLE build blocks inside setup (iwm_slip::setup_spi) until the SLIP
+    connection is made. Starting it first (as adam does) deadlocks the whole
+    session: start_runtime never returns, the emulator thread is never created,
+    the listener never binds, and FujiNet waits forever. The session now starts
+    the emulator, waits on a condvar for the core to report itself up, and only
+    then starts FujiNet. The Android app does the same. PORTING.md §2 lists
+    Apple2 as having "forgiving" ordering like ADAM -- that is wrong, and the
+    guide is worth correcting.
+
+  NOT working -- the next thing to do:
+  * The machine sits at the "Apple //e" banner and never boots FujiNet CONFIG,
+    even though the SmartPort dialogue is happening. Leads:
+      - the INIT response reports "status: 255, num: 0" and enumerates drives
+        as unit 0d/0e, which looks wrong for a first device;
+      - check whether the //e autostart actually enters the slot-7 spoverslip
+        firmware, or falls through to the Disk ][ in slot 6 (before the card
+        was inserted the CPU sat at $C65E, inside that ROM);
+      - a post-connect cold reset was tried and does NOT fix it;
+      - compare the SmartPort dialogue against the known-good standalone
+        fujinet-pc-apple2 driving a real AppleWin (sa2) build.
+  * fnconfig.ini is still the Android app's ATARI default (hsioindex,
+    [Cassette], enable_apetime, Atari TNFS hosts). Curate it for Apple II.
+  * Web UI port 8000 collides with a standalone fujinet-pc-atari on this
+    machine; FUJINET_WEBUI_BIND overrides it for testing.
+
 Next
 ----
-
-M2  clone-and-build: verify a fresh clone with no *_SRC, and a tree with no
-    git metadata (the clone-the-pin path), both build.
-M3  FujiNet in-process -- THE LONG POLE.
-    - tools/fujinet/build-fujinet-desktop.sh forked from adam's (851 lines):
-      PC_TARGET="APPLE", [BOIP] port=1985, web UI 8000.
-    - keep all 11 target-independent patch blocks; ADD the two APPLE ones
-      (fnFsSPIFFS.cpp and mgHttpClient.cpp must root their paths absolutely
-      from FUJINET_RUNTIME_ROOT -- AppleWin's SetCurrentImageDir chdir()s and
-      moves the shared process CWD out from under FujiNet).
-    - expect a NEW set of MinGW portability gaps in lib/device/iwm and
-      lib/bus/iwm; nobody has built that device tree for Windows.
-    - cmake/FujiNetRuntime.cmake currently self-disables with a warning until
-      the script exists. Replace it with adam's real one.
-    - curate fnconfig.ini: the Android app still ships the ATARI default.
-    - before blaming the bus, check for a stray standalone fujinet-pc-apple2
-      holding port 1985 (one exists in ~/Workspace/fujinet-pc-apple2/build).
 M4  settings, media import, ROM import (needed for WITH_APPLE_ROMS=OFF --
     see COMPLIANCE.md; currently OFF is a hard error), gamepad, audio.
 M5  KDE frontend (early, to keep the core toolkit-agnostic).
