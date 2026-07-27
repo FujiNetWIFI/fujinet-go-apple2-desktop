@@ -268,7 +268,7 @@ static void *emu_thread_main(void *arg)
     /* Tell the external ROM loader where to look. Only a
      * WITH_APPLE_ROMS=OFF build reads this; setting it always keeps the two
      * configurations behaving the same from the session's point of view. */
-    setenv("APPLE2_ROM_DIR", s->roms_dir, 1);
+    apple2_setenv("APPLE2_ROM_DIR", s->roms_dir);
 
     apple2host_set_log_sink(core_log_sink, s);
     apple2host_set_frame_sink(on_core_frame, s);

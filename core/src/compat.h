@@ -13,7 +13,19 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <stdlib.h>
 #include <time.h>
+
+/* setenv() is POSIX; MSVCRT spells it _putenv_s. Same shim the FujiNet
+ * firmware already carries in lib/clock/Clock.cpp. */
+static inline int apple2_setenv(const char *name, const char *value)
+{
+#if defined(_WIN32)
+    return _putenv_s(name, value);
+#else
+    return setenv(name, value, 1);
+#endif
+}
 
 static inline void apple2_thread_setname(const char *name)
 {
