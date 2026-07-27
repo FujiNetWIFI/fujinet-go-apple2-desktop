@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>FujiNet Go Apple II</string>
+  <key>CFBundleDisplayName</key>
+  <string>FujiNet Go Apple II</string>
+  <key>CFBundleIdentifier</key>
+  <string>online.fujinet.go.apple2.macos</string>
+  <key>CFBundleExecutable</key>
+  <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${PROJECT_VERSION}</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+  <!-- The FujiNet web UI is plain HTTP on loopback. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+</dict>
+</plist>

@@ -308,10 +308,31 @@ Next
 M6  remaining: Apple II video views (text / lo-res / hi-res page decoders) to
     replace adam's vdpview.c, and the corresponding panes in the three
     debugger windows.
-M10 remaining: the macOS AppKit frontend (main.m, AppDelegate, DisplayView on
-    CVDisplayLink, DebuggerWindow) and its CI packaging. It cannot be built
-    locally -- the macOS CI job is the only verifier -- so keep the diff from
-    fujinet-go-adam-desktop/frontends/macos tight.
+M10 macOS: WRITTEN, verified only by the macOS CI job -- there is no Mac here.
+    frontends/macos: AppKit over the shared session. Same two deliberate
+    differences as the Win32 one: no pixel conversion (XRGB8888 is exactly
+    what a CGImage asked for kCGBitmapByteOrder32Little |
+    kCGImageAlphaNoneSkipFirst reads, so the session's buffer goes straight
+    to CoreGraphics), and geometry driven by the frame's own dimensions.
+    CVDisplayLink for the vsync ticks -- deprecated in macOS 15 in favour of
+    NSView.displayLink (14+), kept on purpose because plenty of Intel Macs
+    never see macOS 14.
+    THE APPLE KEYS ARE THE OPTION KEYS, NOT COMMAND. Command is how every
+    menu shortcut on the system is typed and swallowing it would cost the
+    user Cmd-Q and Cmd-W. Modifiers never produce keyDown:/keyUp: on macOS --
+    they arrive as flagsChanged: with no press/release of their own, so the
+    held state is tracked by hand from event.keyCode (0x3A left, 0x3D right).
+    The two key codes are spelled out rather than pulled from Carbon: linking
+    a whole framework for two integers is not a trade worth making.
+    Settings popups are generated from the core's own option names, like the
+    Win32 menus.
+    NOTE for any future AppKit pane: ARC will NOT let you pass &ivar to an
+    NSTextView ** out-parameter (the ivar is __strong, the parameter is
+    __autoreleasing). Return the scroll view and pick the text view back up
+    from .documentView instead.
+    The bundle is UNSIGNED; Gatekeeper blocks it on first launch. Signing and
+    notarisation want an Apple Developer identity in the repo secrets --
+    fujinet-go-adam-desktop's macos job has the step to copy when one exists.
 Upstream to FujiNetWIFI/AppleWin: the SmartPort-over-SLIP listener is never
     started by the libretro frontend, it binds 0.0.0.0 rather than loopback,
     and Listener.cpp is missing <cstring> for MinGW. The first two silently

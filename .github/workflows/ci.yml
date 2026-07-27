@@ -128,13 +128,14 @@ jobs:
             -DSDL_TEST_LIBRARY=OFF
           cmake --build sdl3-src/build
           sudo cmake --install sdl3-src/build
-      # No native frontend on macOS yet, so this proves the core, the compat
-      # shims, the staged AppleWin tree and libfujinet.dylib build and pass
-      # tests on real Apple hardware. (Homebrew's mbedTLS is 4.x, which drops
-      # the legacy headers FujiNet includes, so the FujiNet build compiles
-      # the pinned 3.6.5 for itself.)
+      # This job is the only machine that ever compiles the AppKit frontend.
+      # (Homebrew's mbedTLS is 4.x, which drops the legacy headers FujiNet
+      # includes, so the FujiNet build compiles the pinned 3.6.5 for itself.)
+      #
+      # ROM-LESS on purpose: the bundle is uploaded and then attached to
+      # releases. See the note at the top of this file and COMPLIANCE.md.
       - name: Configure
-        run: cmake -B build -G Ninja -DFRONTEND=none
+        run: cmake -B build -G Ninja -DFRONTEND=macos -DWITH_APPLE_ROMS=OFF
       - name: Build
         run: cmake --build build
       - name: Test
@@ -145,15 +146,44 @@ jobs:
           test -f "$LIB" || { echo "::error::$LIB missing"; exit 1; }
           nm -gU "$LIB" | grep -q _fujinet_desktop_start_runtime \
             || { echo "::error::entry points not exported"; exit 1; }
-      # Every Mach-O that would ship must depend only on system libraries.
-      - name: Verify the FujiNet runtime is self-contained
+      # Every Mach-O that would ship must depend only on system libraries: a
+      # bundle that links /opt/homebrew paths only launches on machines that
+      # happen to have that formula installed. Checked across the whole
+      # bundle, not just the dylib -- the executable links SDL3 and Boost too.
+      - name: Verify the app bundle is self-contained
         run: |
-          LIB=tools/fujinet/work/out/libfujinet.dylib
-          otool -L "$LIB"
-          if otool -L "$LIB" | tail -n +2 | grep -E "/opt/homebrew|/usr/local"; then
-            echo "::error::non-system library leaked into libfujinet.dylib"
-            exit 1
-          fi
+          APP="build/frontends/macos/FujiNet Go Apple II.app"
+          test -d "$APP" || { echo "::error::$APP missing"; exit 1; }
+          fail=0
+          while IFS= read -r macho; do
+            echo "--- $macho ---"
+            otool -L "$macho" | tail -n +2
+            if otool -L "$macho" | tail -n +2 \
+                 | grep -E "/opt/homebrew|/usr/local"; then
+              echo "::error::non-system library leaked into $macho"
+              fail=1
+            fi
+          done < <(find "$APP" -type f -perm +111 -exec sh -c \
+                     'file -b "$1" | grep -q Mach-O && echo "$1"' _ {} \;)
+          exit $fail
+      # ditto preserves the executable bits and bundle structure that a plain
+      # artifact upload of a .app directory does not.
+      #
+      # NOTE: the bundle is UNSIGNED. Gatekeeper will block it on first
+      # launch until it is opened from the right-click menu. Signing and
+      # notarisation need an Apple Developer identity in the repository
+      # secrets; wire them in here when one exists (see the equivalent step
+      # in fujinet-go-adam-desktop).
+      - name: Zip app bundle
+        run: |
+          ditto -c -k --keepParent \
+            "build/frontends/macos/FujiNet Go Apple II.app" \
+            FujiNet-Go-Apple2-macos.zip
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v5
+        with:
+          name: FujiNet-Go-Apple2-macos
+          path: FujiNet-Go-Apple2-macos.zip
 
   windows:
     runs-on: windows-latest
@@ -369,16 +399,14 @@ jobs:
           path: artifacts
       # download-artifact unpacks each artifact into its own directory, so
       # the folder-shaped Windows one is re-zipped for the release page.
-      #
-      # No macOS asset yet: that frontend is not written, so the macos job
-      # builds and tests the core but produces nothing to ship. Add it here
-      # when frontends/macos lands.
       - name: Assemble release assets
         run: |
           tag="${GITHUB_REF#refs/tags/v}"
           mkdir -p release
           (cd artifacts/FujiNet-Go-Apple2-windows \
            && zip -qr "../../release/FujiNet-Go-Apple2-${tag}-windows.zip" .)
+          cp "artifacts/FujiNet-Go-Apple2-macos/FujiNet-Go-Apple2-macos.zip" \
+             "release/FujiNet-Go-Apple2-${tag}-macos.zip"
           cp "artifacts/FujiNet-Go-Apple2-windows-installer/FujiNet-Go-Apple2-Setup.exe" \
              "release/FujiNet-Go-Apple2-${tag}-windows-setup.exe"
           cp "artifacts/fujinet-go-apple2-gnome-flatpak/fujinet-go-apple2-gnome.flatpak" \

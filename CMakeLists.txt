@@ -65,17 +65,8 @@ endif()
 if(FRONTEND STREQUAL "kde" OR (FRONTEND STREQUAL "all" AND UNIX AND NOT APPLE))
   add_subdirectory(frontends/kde)
 endif()
-# The AppKit frontend is not written yet. Guarded by EXISTS so configuring on
-# a Mac with the default FRONTEND=all says so plainly instead of failing on a
-# missing add_subdirectory; drop the guard once frontends/macos lands.
 if(FRONTEND STREQUAL "macos" OR (FRONTEND STREQUAL "all" AND APPLE))
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/frontends/macos/CMakeLists.txt")
-    add_subdirectory(frontends/macos)
-  elseif(FRONTEND STREQUAL "macos")
-    message(FATAL_ERROR "The macOS frontend is not implemented yet.")
-  else()
-    message(STATUS "No macOS frontend yet: building the core only.")
-  endif()
+  add_subdirectory(frontends/macos)
 endif()
 if(FRONTEND STREQUAL "windows" OR (FRONTEND STREQUAL "all" AND WIN32))
   add_subdirectory(frontends/windows)

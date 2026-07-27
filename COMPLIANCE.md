@@ -46,6 +46,7 @@ file that defines the artifact, not in the command that invokes it:
 |---|---|
 | GNOME flatpak | `build-aux/flatpak/online.fujinet.go.apple2.gnome.yml` |
 | KDE flatpak | `build-aux/flatpak/online.fujinet.go.apple2.kde.yml` |
+| macOS `.app` bundle | the `macos` job in `.github/workflows/ci.yml` |
 | Windows folder + installer | the `windows` job in `.github/workflows/ci.yml` |
 
 Those are the only artifacts CI uploads, and the release job attaches nothing

@@ -1,8 +1,8 @@
 # FujiNet Go Apple II — desktop
 
 A self-contained Apple II with FujiNet built in. One shared C session core
-plus native frontends: GTK4/libadwaita on GNOME, Qt6 Widgets on KDE and Win32
-on Windows, with AppKit (macOS) to come.
+plus four native frontends: GTK4/libadwaita on GNOME, Qt6 Widgets on KDE,
+AppKit on macOS and Win32 on Windows.
 
 Emulation is AppleWin's libretro core. FujiNet is not a subprocess: the
 firmware is built as a shared library, `dlopen`'d into the process, and joined
@@ -15,12 +15,13 @@ This is the second member of the FujiNet Go desktop family;
 is the model repository, and its `PORTING.md` is the specification this
 follows.
 
-> **Status: in progress.** The machine boots into FujiNet's CONFIG on the
-> GNOME, KDE and Windows frontends, paced to display vsync, with keyboard and
-> paddle input, disk/ROM import, and a 6502 debugger with its own window on
-> each. Linux, macOS, Windows and both flatpaks are green in CI, which also
-> builds the Windows installer and can cut a release. Still to come: the
-> macOS frontend and the Apple II video views in the debugger. See `TODO`.
+> **Status: in progress.** The machine boots into FujiNet's CONFIG, paced to
+> display vsync, with keyboard and paddle input, disk/ROM import, and a 6502
+> debugger with its own native window on all four frontends. Linux, macOS,
+> Windows and both flatpaks are green in CI, which also builds the Windows
+> installer and the macOS bundle and can cut a release. Still to come: the
+> Apple II video views in the debugger, and code signing for the macOS
+> bundle. See `TODO`.
 
 ## Building
 
@@ -47,7 +48,7 @@ them the FujiNet web UI opens in the system browser.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `FRONTEND` | `all` | `gnome`, `kde`, `windows`, `all`, `none`. `all` considers only the host's viable frontends. |
+| `FRONTEND` | `all` | `gnome`, `kde`, `macos`, `windows`, `all`, `none`. `all` considers only the host's viable frontends. |
 | `WITH_FUJINET` | `ON` | Build and embed the FujiNet runtime. |
 | `WITH_WEBVIEW` | `ON` | Embed the FujiNet web UI rather than opening a browser. |
 | `WITH_APPLE_ROMS` | `ON` | Embed the Apple II system ROMs. **See `COMPLIANCE.md` before distributing.** |
@@ -80,8 +81,8 @@ licensed.
   at all — its SmartPort card firmware is not Apple's and stays embedded.
 
 **The packaging path inverts this default on purpose.** The flatpak manifests
-and the Windows CI job build with `WITH_APPLE_ROMS=OFF`, so nothing this
-repository uploads or attaches to a release contains Apple firmware. A local
+and the macOS and Windows CI jobs build with `WITH_APPLE_ROMS=OFF`, so nothing
+this repository uploads or attaches to a release contains Apple firmware. A local
 `flatpak-builder` run therefore also produces a ROM-less bundle; flip the one
 `-DWITH_APPLE_ROMS=` line in `build-aux/flatpak/*.yml` if you want a local
 flatpak that boots out of the box, and then keep it to yourself.
@@ -92,8 +93,11 @@ Read `COMPLIANCE.md` before publishing anything.
 
 Everything goes to the Apple II except **F10** (menu), **F11** (fullscreen)
 and **F12** (debugger). In particular **Alt is not passed to the window
-manager** — the Alt keys are Open Apple and Closed Apple. On a Mac keyboard
-the Command keys work too.
+manager** — the Alt keys are Open Apple and Closed Apple.
+
+On macOS the Apple keys are the two **Option** keys, not Command: Command is
+how every menu shortcut on the system is typed, and swallowing it would cost
+you ⌘Q and ⌘W. Full screen is ⌃⌘F.
 
 In the debugger: **F5** pause/continue, **F7** step into, **F8** step over,
 **Shift+F8** step out; click a disassembly line to toggle a breakpoint.
@@ -112,7 +116,12 @@ In the debugger: **F5** pause/continue, **F7** step into, **F8** step over,
 | Platform | Artifact | Built by |
 |---|---|---|
 | Linux | `.flatpak` bundle, one per frontend | `build-aux/flatpak/online.fujinet.go.apple2.{gnome,kde}.yml` |
+| macOS | `.app` bundle, zipped with `ditto` | the `macos` CI job |
 | Windows | portable folder **and** an NSIS installer (per-user, no UAC) | the `windows` CI job + `build-aux/windows/installer.nsi` |
+
+The macOS bundle is **unsigned**: Gatekeeper blocks it on first launch until
+it is opened from the right-click menu. Signing and notarisation need an Apple
+Developer identity in the repository secrets.
 
 The Windows frontend has no native host here, so it is developed by
 cross-compiling with `cmake/toolchains/mingw-w64.cmake` and smoke-testing
