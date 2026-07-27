@@ -113,6 +113,35 @@ static int is_file(const char *path)
     return path && *path && stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
+/* Does the ROM directory hold anything AppleWin's external loader would
+ * actually pick up? A WITH_APPLE_ROMS=OFF build's ROM loader
+ * (tools/applewin/generate-rom-loader.py) matches by exact filename, but for
+ * diagnosing "nothing has been imported yet" any file with a .rom or .bin
+ * extension is a good enough signal -- it distinguishes a fresh ROM dir from
+ * one the user has actually put files into. */
+int roms_dir_has_any_rom(const char *dir)
+{
+    DIR *d;
+    struct dirent *e;
+    int found = 0;
+
+    d = opendir(dir);
+    if (!d) return 0;
+    while (!found && (e = readdir(d)) != NULL) {
+        const char *dot = strrchr(e->d_name, '.');
+        char ext[8];
+        int i;
+        if (!dot || !dot[1]) continue;
+        for (i = 0; i < (int)sizeof(ext) - 1 && dot[1 + i]; i++)
+            ext[i] = (char)(dot[1 + i] | 0x20); /* lowercase */
+        ext[i] = '\0';
+        if (!strcmp(ext, "rom") || !strcmp(ext, "bin"))
+            found = 1;
+    }
+    closedir(d);
+    return found;
+}
+
 int copy_file(const char *src, const char *dst)
 {
     FILE *in, *out;

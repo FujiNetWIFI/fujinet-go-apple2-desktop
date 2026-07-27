@@ -50,7 +50,7 @@ them the FujiNet web UI opens in the system browser.
 | `FRONTEND` | `all` | `gnome`, `kde`, `macos`, `windows`, `all`, `none`. `all` considers only the host's viable frontends. |
 | `WITH_FUJINET` | `ON` | Build and embed the FujiNet runtime. |
 | `WITH_WEBVIEW` | `ON` | Embed the FujiNet web UI rather than opening a browser. |
-| `WITH_APPLE_ROMS` | `ON` | Embed the Apple II system ROMs. **See `COMPLIANCE.md` before distributing.** |
+| `WITH_APPLE_ROMS` | `ON` | Embed the Apple II system ROMs (see `COMPLIANCE.md`). |
 | `APPLEWIN_SRC` | — | Build against an out-of-tree AppleWin checkout instead of the pinned submodule. |
 | `FUJINET_SRC` | — | Likewise for the FujiNet firmware. |
 | `APPLEWIN_RESTAGE` | `OFF` | Re-stage AppleWin — how to pick up uncommitted edits in an `APPLEWIN_SRC` checkout. |
@@ -70,23 +70,21 @@ The Apple II ROMs are Apple copyrighted firmware and are **not** freely
 licensed.
 
 - **`WITH_APPLE_ROMS=ON`** (the default) compiles them in, which is what makes
-  the machine boot out of the box — but an artifact built that way **must not
-  be redistributed.**
+  the machine boot out of the box. AppleWin itself has shipped this way for
+  over a decade of continuous public use, and this project follows that
+  precedent: CI builds and every published release use this configuration.
 - **`WITH_APPLE_ROMS=OFF`** builds without them. Supply your own with
   **Import System ROMs…**, which copies them into
   `~/.local/share/fujinet-go-apple2/roms` (override with `APPLE2_ROM_DIR`).
   AppleWin looks ROMs up by exact filename, so keep the names
   (`Apple2e_Enhanced.rom`, `DISK2.rom`, …). FujiNet still works with no ROMs
   at all — its SmartPort card firmware is not Apple's and stays embedded.
+  This is for anyone who cannot embed Apple's firmware under their own
+  packaging policy (a Linux distribution, most notably); CI keeps it built
+  and tested via the `linux` job's `build-noroms` step even though nothing
+  published from this repository uses it.
 
-**The packaging path inverts this default on purpose.** The flatpak manifests
-and the macOS and Windows CI jobs build with `WITH_APPLE_ROMS=OFF`, so nothing
-this repository uploads or attaches to a release contains Apple firmware. A local
-`flatpak-builder` run therefore also produces a ROM-less bundle; flip the one
-`-DWITH_APPLE_ROMS=` line in `build-aux/flatpak/*.yml` if you want a local
-flatpak that boots out of the box, and then keep it to yourself.
-
-Read `COMPLIANCE.md` before publishing anything.
+See `COMPLIANCE.md` for the reasoning and how the `OFF` build is enforced.
 
 ## Keyboard
 

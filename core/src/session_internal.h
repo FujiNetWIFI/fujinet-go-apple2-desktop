@@ -123,6 +123,7 @@ int  paths_init(apple2session *s, const apple2session_paths *p);
 int  paths_provision_fujinet(apple2session *s); /* fills fujinet_* or "" */
 int  mkdir_p(const char *path);
 int  copy_file(const char *src, const char *dst);
+int  roms_dir_has_any_rom(const char *dir);
 
 /* audio_sdl.c */
 int  audio_start(apple2session *s);

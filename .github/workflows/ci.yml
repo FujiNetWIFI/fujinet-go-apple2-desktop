@@ -20,11 +20,14 @@
 # sandbox has no network during the build, so anything the manifest does not
 # declare is simply absent.
 #
-# EVERYTHING THIS WORKFLOW UPLOADS IS BUILT ROM-LESS (WITH_APPLE_ROMS=OFF).
-# The Apple II system ROMs are Apple copyrighted firmware; the packaging
-# path must fail safe, so the option's default is inverted here relative to
-# CMakeLists.txt. The linux job covers the ROMs-embedded build. The release
-# job attaches only these artifacts. See COMPLIANCE.md.
+# EVERY ARTIFACT THIS WORKFLOW UPLOADS EMBEDS THE APPLE II SYSTEM ROMS
+# (WITH_APPLE_ROMS=ON, which is also CMakeLists.txt's default). AppleWin
+# itself has shipped this way for over a decade of constant use, and this
+# project follows that precedent so the machine boots out of the box.
+# WITH_APPLE_ROMS=OFF remains a supported configuration -- the linux job's
+# build-noroms step keeps it built and tested -- for anyone (e.g. a Linux
+# distribution) who cannot embed Apple's firmware under their own policies.
+# See COMPLIANCE.md.
 
 name: CI
 
@@ -98,10 +101,12 @@ jobs:
               || { echo "::error::$f was not installed"; exit 1; }
           done
 
-      # The redistributable configuration. Its own test suite includes
-      # no_embedded_roms, which greps the binary for a slice of every firmware
-      # image in the staged tree -- so "this build carries no Apple ROMs" is
-      # checked rather than asserted. See COMPLIANCE.md.
+      # The ROM-less configuration, kept built and tested for anyone who
+      # cannot embed Apple's firmware under their own policies (e.g. a Linux
+      # distribution). Its own test suite includes no_embedded_roms, which
+      # greps the binary for a slice of every firmware image in the staged
+      # tree -- so "this build carries no Apple ROMs" is checked rather than
+      # asserted. See COMPLIANCE.md.
       - name: Build and test the ROM-less configuration
         run: |
           cmake -B build-noroms -G Ninja -DWITH_APPLE_ROMS=OFF \
@@ -132,10 +137,12 @@ jobs:
       # (Homebrew's mbedTLS is 4.x, which drops the legacy headers FujiNet
       # includes, so the FujiNet build compiles the pinned 3.6.5 for itself.)
       #
-      # ROM-LESS on purpose: the bundle is uploaded and then attached to
-      # releases. See the note at the top of this file and COMPLIANCE.md.
+      # ROMs embedded on purpose: the bundle is uploaded and then attached to
+      # releases, and should boot out of the box the way AppleWin itself has
+      # for over a decade. See the note at the top of this file and
+      # COMPLIANCE.md.
       - name: Configure
-        run: cmake -B build -G Ninja -DFRONTEND=macos -DWITH_APPLE_ROMS=OFF
+        run: cmake -B build -G Ninja -DFRONTEND=macos -DWITH_APPLE_ROMS=ON
       - name: Build
         run: cmake --build build
       - name: Test
@@ -234,13 +241,12 @@ jobs:
       # did it. Before reaching here, Windows changes are cross-compiled with
       # cmake/toolchains/mingw-w64.cmake and smoke-tested under wine.
       #
-      # ROM-LESS on purpose: this job's output is uploaded and then attached
-      # to releases, and the Apple II system ROMs are Apple copyrighted
-      # firmware that must not be redistributed. The app ships the
-      # "Import System ROMs..." path for the user to supply their own. The
-      # linux job covers the WITH_APPLE_ROMS=ON build. See COMPLIANCE.md.
+      # ROMs embedded on purpose: this job's output is uploaded and then
+      # attached to releases, and should boot out of the box the way
+      # AppleWin itself has for over a decade of constant use. See
+      # COMPLIANCE.md.
       - name: Configure
-        run: cmake -B build -G Ninja -DFRONTEND=windows -DWITH_APPLE_ROMS=OFF
+        run: cmake -B build -G Ninja -DFRONTEND=windows -DWITH_APPLE_ROMS=ON
       - name: Build
         run: cmake --build build
       - name: Test
@@ -364,9 +370,9 @@ jobs:
   # Publishing. Runs only for v* tags, and only once every platform has built
   # and tested: the release carries exactly the binaries CI verified.
   #
-  # Every artifact assembled here is built ROM-LESS -- see the WITH_APPLE_ROMS
-  # notes in the windows job and the flatpak manifests, and COMPLIANCE.md.
-  # Nothing published from this repository contains Apple firmware.
+  # Every artifact assembled here embeds the Apple II system ROMs -- see the
+  # WITH_APPLE_ROMS notes in the macos/windows jobs and the flatpak
+  # manifests, and COMPLIANCE.md.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [linux, macos, windows, flatpak]

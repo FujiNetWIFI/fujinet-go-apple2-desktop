@@ -26,13 +26,15 @@ option(WITH_WEBVIEW "Embed the FujiNet web UI (WebKitGTK / QtWebEngine)" ON)
 # The Apple II monitor/Applesoft/Disk ][ ROMs are Apple copyrighted firmware
 # and are NOT freely licensed. AppleWin's own `apple2roms` resource target
 # compiles them into the binary (xxd -i), which is what makes the machine boot
-# out of the box -- but it also makes the resulting artifact unsuitable for
-# public redistribution. See COMPLIANCE.md.
+# out of the box. AppleWin itself has shipped this way for over a decade of
+# constant public use; this project follows that precedent, including in
+# published releases. See COMPLIANCE.md.
 #
-#   ON  (default) -- embed, as the Android app does. Local/development builds.
+#   ON  (default) -- embed, as AppleWin itself and the release job do.
 #   OFF           -- build ROM-less; the user supplies ROMs through the
-#                    "Import System ROMs..." path. This is what the release
-#                    job builds.
+#                    "Import System ROMs..." path. For anyone (e.g. a Linux
+#                    distribution) who cannot embed Apple's firmware under
+#                    their own packaging policy.
 option(WITH_APPLE_ROMS "Embed the Apple II system ROMs (see COMPLIANCE.md)" ON)
 
 # Included here, at the top of the tree, so every subdirectory sees the
@@ -72,7 +74,7 @@ if(FRONTEND STREQUAL "windows" OR (FRONTEND STREQUAL "all" AND WIN32))
   add_subdirectory(frontends/windows)
 endif()
 
-# The ROM-less claim, checked on every binary that ships.
+# The ROM-less claim, checked on every binary built with this option off.
 #
 # This used to run against the boot_smoke test binary alone. That is a poor
 # stand-in: the thing whose contents matter is the executable a user

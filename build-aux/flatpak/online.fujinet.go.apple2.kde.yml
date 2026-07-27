@@ -141,16 +141,16 @@ modules:
       # Boost from the module above, by explicit path: the AppleWin tree is
       # compiled as a subdirectory and looks it up through Boost_INCLUDE_DIRS.
       - -DAPPLE2_BOOST_INCLUDE_DIR=/app/include
-      # The Apple II system ROMs are Apple copyrighted firmware. A flatpak
-      # bundle is a thing that gets handed to other people -- CI uploads it
-      # and a release attaches it -- so this manifest builds ROM-LESS and the
-      # user supplies ROMs through "Import System ROMs...". The default is
-      # OFF here (and ON in CMakeLists.txt) on purpose: the packaging path is
-      # the one that must fail safe.
+      # The Apple II system ROMs are Apple copyrighted firmware. AppleWin
+      # itself has embedded them for over a decade of constant public use, and
+      # this project follows that precedent so the flatpak boots out of the
+      # box like every other artifact CI publishes. See COMPLIANCE.md.
       #
-      # For a local build that boots out of the box, flip this to ON -- and
-      # then do not pass the resulting bundle on. See COMPLIANCE.md.
-      - -DWITH_APPLE_ROMS=OFF
+      # For a build that must not carry Apple's firmware (e.g. under a Linux
+      # distribution's own packaging policy), flip this to OFF; the app then
+      # ships the "Import System ROMs..." path for the user to supply their
+      # own.
+      - -DWITH_APPLE_ROMS=ON
     build-options:
       env:
         # Where the FujiNet build finds the static mbedTLS built above.

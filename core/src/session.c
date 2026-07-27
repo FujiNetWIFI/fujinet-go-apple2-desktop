@@ -276,7 +276,22 @@ static void *emu_thread_main(void *arg)
     {
         int ok = apple2host_core_start();
         if (!ok) {
-            session_set_error(s, "the AppleWin core failed to start");
+#ifndef APPLE2_ROMS_EMBEDDED
+            /* This build doesn't carry Apple's copyrighted ROMs (see
+             * COMPLIANCE.md) -- by far the most likely reason the core just
+             * failed to start is that none have been imported yet. Say so
+             * instead of the generic message: the alternative is a black
+             * window with no clue why. */
+            if (!roms_dir_has_any_rom(s->roms_dir))
+                session_set_error(s,
+                    "No Apple II ROM files found in %s.\n\n"
+                    "This build does not include Apple's copyrighted system "
+                    "ROMs. Use Media > Import System ROMs... to supply your "
+                    "own (or set APPLE2_ROM_DIR to point at a folder that "
+                    "already has them).", s->roms_dir);
+            else
+#endif
+                session_set_error(s, "the AppleWin core failed to start");
             apple2host_set_frame_sink(NULL, NULL);
         }
         /* Publish the result either way: apple2session_start is blocked on

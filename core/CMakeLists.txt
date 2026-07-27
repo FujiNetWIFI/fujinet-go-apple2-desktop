@@ -217,6 +217,10 @@ target_compile_definitions(apple2session PRIVATE
   APPLE2_SOURCE_SYMBOLS_DIR="${AW}/bin"
   APPLE2_INSTALL_DATADIR="${CMAKE_INSTALL_FULL_DATADIR}/fujinet-go-apple2"
   APPLE2_INSTALL_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/fujinet-go-apple2"
+  # Lets session.c tell a real core failure apart from "no ROMs imported
+  # yet" on a WITH_APPLE_ROMS=OFF build, so it can report the latter with a
+  # useful message instead of the generic one.
+  $<$<BOOL:${WITH_APPLE_ROMS}>:APPLE2_ROMS_EMBEDDED>
 )
 
 # Referencing retro_* directly pulls in the libretro objects and transitively

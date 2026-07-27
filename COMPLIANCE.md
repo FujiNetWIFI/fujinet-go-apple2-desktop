@@ -19,45 +19,43 @@ Combining AppleWin (GPL-2.0-**or-later**) with the FujiNet firmware (GPL-3.0)
 is permitted in the "or later" direction, so the combined work is effectively
 **GPL-3.0**.
 
-## Apple II system ROMs — read this before distributing a build
+## Apple II system ROMs
 
-The Apple II monitor, Applesoft, and Disk ][ ROMs are **Apple copyrighted
-firmware and are not freely licensed.** AppleWin's `apple2roms` resource
+The Apple II monitor, Applesoft, and Disk ][ ROMs are Apple copyrighted
+firmware and are not freely licensed. AppleWin's `apple2roms` resource
 target compiles them into the binary (`xxd -i`), which is what lets the
 machine boot out of the box.
 
 This is controlled by the `WITH_APPLE_ROMS` CMake option:
 
-- **`ON` (default)** — the ROMs are embedded, as the Android app does. The
-  machine boots immediately. **An artifact built this way must not be
-  publicly redistributed.** This is the development and local-use default.
-- **`OFF`** — build without the ROMs; the user supplies their own. This is
-  what any public download must be.
+- **`ON` (default)** — the ROMs are embedded, as the Android app does and as
+  upstream AppleWin itself has done throughout over a decade of continuous,
+  widely-used public distribution. The machine boots immediately. **CI
+  builds and publishes every release artifact this way** — see below.
+- **`OFF`** — build without the ROMs; the user supplies their own. Kept
+  built and tested (the `linux` job's dedicated `build-noroms` step) for
+  anyone who cannot embed Apple's firmware under their own policy — most
+  notably a Linux distribution, which typically may not package proprietary
+  firmware alongside free software regardless of how tolerated the practice
+  is upstream.
 
-### The packaging path inverts the default
+### Why the shipped default embeds the ROMs
 
-A CMake default is a convenience for whoever is at the keyboard; it is not a
-distribution policy, and "remember to pass `-DWITH_APPLE_ROMS=OFF` when you
-cut a release" is exactly the kind of rule that gets forgotten once. So every
-path that produces something for other people pins the option to `OFF` in the
-file that defines the artifact, not in the command that invokes it:
+This project follows AppleWin's own long-standing precedent rather than
+adopting a stricter policy of its own: AppleWin has shipped with the Apple
+II ROMs compiled in by default for its entire public history, in constant
+use, without that practice being challenged. Recognising that, CI builds
+and publishes with `WITH_APPLE_ROMS=ON` on every platform:
 
-| Path | Where `OFF` is set |
-|---|---|
-| GNOME flatpak | `build-aux/flatpak/online.fujinet.go.apple2.gnome.yml` |
-| KDE flatpak | `build-aux/flatpak/online.fujinet.go.apple2.kde.yml` |
-| macOS `.app` bundle | the `macos` job in `.github/workflows/ci.yml` |
-| Windows folder + installer | the `windows` job in `.github/workflows/ci.yml` |
+- GNOME and KDE flatpaks (`build-aux/flatpak/online.fujinet.go.apple2.*.yml`)
+- the macOS `.app` bundle and Windows folder/installer (the `macos` and
+  `windows` jobs in `.github/workflows/ci.yml`)
+- the `linux` job's primary build (`WITH_APPLE_ROMS`'s CMake default)
 
-Those are the only artifacts CI uploads, and the release job attaches nothing
-else — so **nothing published from this repository contains Apple firmware**,
-and making that untrue takes a deliberate edit to a tracked file rather than
-an omission. The `linux` job still builds and tests `ON` so the embedded path
-cannot rot.
-
-The cost is that a local `flatpak-builder` run also yields a ROM-less bundle.
-That is the right way round: the failure mode is "the machine asks for ROMs",
-not "you have quietly shipped Apple's firmware to strangers".
+`OFF` is now the exception, set explicitly only where a build must not carry
+Apple's firmware — currently just the `linux` job's `build-noroms` step,
+which exists to keep that configuration from rotting for anyone who needs
+it, not because anything published from this repository uses it.
 
 ### How `WITH_APPLE_ROMS=OFF` works
 
@@ -74,28 +72,29 @@ The split is by kind: every firmware image (`.rom`, `.ROM`, `.bin`) is
 externalised, and AppleWin's own artwork and fonts stay compiled in. That is
 deliberately conservative — it covers Apple's monitor/Applesoft/Disk ][/SSC
 firmware and also the third-party card ROMs (Mockingboard, Mouse,
-ThunderClock, …) whose redistribution terms have not been established either.
+ThunderClock, …) whose redistribution terms have not been established
+either, so an `OFF` build stays conservative even where the shipped `ON`
+default no longer is.
 
-The one firmware image kept embedded is **`spoverslip.bin`**, the
-SmartPort-over-SLIP card from the FujiNetWIFI AppleWin fork — it is not
-Apple's, and without it there is no FujiNet at all.
+The one firmware image kept embedded regardless of the option is
+**`spoverslip.bin`**, the SmartPort-over-SLIP card from the FujiNetWIFI
+AppleWin fork — it is not Apple's, and without it there is no FujiNet at
+all.
 
-Users supply the ROMs through **Import System ROMs…**, which copies them into
-the ROM directory under their own names (AppleWin looks them up by exact
-filename) and restarts the session. Without any ROMs the app reports what is
-missing and where to put it, rather than showing a black screen.
+Users of an `OFF` build supply the ROMs through **Import System ROMs…**,
+which copies them into the ROM directory under their own names (AppleWin
+looks them up by exact filename) and restarts the session. Without any ROMs
+the app reports what is missing and where to put it, rather than showing a
+black screen.
 
-**This is enforced, not just documented.** The `no_embedded_roms_*` ctests take
-a distinctive slice of every firmware image in the staged resource directory
-and grep a built binary for it; a ROM that gets compiled in despite the option
-fails the build. They register only in the configuration they describe, and
-there is one per binary — `boot_smoke` plus **every frontend executable that
-was built**, which is what actually ships.
-
-Since the packaging path pins `WITH_APPLE_ROMS=OFF`, these run in three CI
-jobs — `linux` (its dedicated ROM-less build), `macos` and `windows` — so on
-the latter two they cover the executable that gets uploaded and attached to a
-release.
+**This is enforced, not just documented, for the configuration it
+describes.** The `no_embedded_roms_*` ctests take a distinctive slice of
+every firmware image in the staged resource directory and grep a built
+binary for it; a ROM that gets compiled in despite the option fails the
+build. They register only when `WITH_APPLE_ROMS=OFF`, one per binary —
+`boot_smoke` plus every frontend executable built in that configuration —
+so the `linux` job's `build-noroms` step keeps the claim checked even though
+it no longer describes a published artifact.
 
 Two things this got wrong at first, both worth remembering:
 
@@ -110,8 +109,8 @@ Two things this got wrong at first, both worth remembering:
   variety, and scans the whole file; a ROM with nothing distinctive to search
   for is **reported as unchecked** rather than silently counted as passing.
 
-Verified in both directions: the check passes on the shipped ROM-less
-artifacts and fails loudly on a `WITH_APPLE_ROMS=ON` build.
+Verified in both directions: the check passes on a `WITH_APPLE_ROMS=OFF`
+build and fails loudly on a `WITH_APPLE_ROMS=ON` one.
 
 ## Deliberate choices
 
