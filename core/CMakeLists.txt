@@ -81,7 +81,14 @@ include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 # ---- AppleWin component libraries, in dependency order ---------------------
 add_subdirectory("${AW}/libyaml"                     applewin-libyaml)
 add_subdirectory("${AW}/minizip"                     applewin-minizip)
-add_subdirectory("${AW}/source/linux/libwindows"     applewin-libwindows)
+# source/linux/libwindows is the Win32-on-POSIX shim: it exists to provide
+# the Win32 APIs AppleWin was written against on platforms that lack them.
+# On Windows the real ones are there, and AppleWin's own CMakeLists guards
+# every use of this target with `if (NOT WIN32)` -- building it there fails
+# outright (its fileapi.cpp calls realpath()).
+if(NOT WIN32)
+  add_subdirectory("${AW}/source/linux/libwindows"   applewin-libwindows)
+endif()
 add_subdirectory("${AW}/source"                      applewin-source)
 
 # ---- the Apple II system ROMs ----------------------------------------------
