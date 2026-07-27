@@ -30,6 +30,17 @@ target_include_directories(fujinet-go-apple2-macos PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(fujinet-go-apple2-macos PRIVATE -Wall -Wextra -fobjc-arc)
 
+# App icon (rendered from the Android app's launcher art by
+# tools/icons/make-icons.py, same source as every other frontend's icon --
+# see the install rules at the bottom of the top-level CMakeLists.txt for the
+# GNOME/KDE side). CFBundleIconFile in Info.plist.in names it "AppIcon".
+add_custom_command(TARGET fujinet-go-apple2-macos POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy
+          "${CMAKE_SOURCE_DIR}/data/icons/mac/fujinet-go-apple2.icns"
+          "$<TARGET_BUNDLE_CONTENT_DIR:fujinet-go-apple2-macos>/Resources/AppIcon.icns"
+  COMMENT "Copying the app icon into the bundle"
+)
+
 # Pack the FujiNet runtime into the bundle: the dylib into
 # Contents/Frameworks, the pristine runtime tree into
 # Contents/Resources/fujinet (main.m hands both paths to the session). The
