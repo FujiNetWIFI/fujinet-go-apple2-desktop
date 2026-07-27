@@ -210,8 +210,17 @@ M6  debugger. THE SEAM IS DONE AND TESTED; the engine and windows remain.
 M7  CI: linux, then macOS and Windows, then flatpak.
     Top Windows risk: the AppleWin libretro frontend has never been built
     under MinGW (the cross-compile work upstream covers the SDL2 frontend).
-M8  icons (art is in ~/Workspace/fujinet-go-launchers/ic_launcher_APPLE2),
-    desktop entries, AppStream, screenshots.
+M8 -- icons done. Rendered by tools/icons/make-icons.py from the Android
+  app's own adaptive-icon foreground
+  (fujinet-go-apple2/app/src/main/res/mipmap-xxxhdpi/ic_launcher_adaptive_fore.png,
+  copied verbatim to data/icons/src/) over the brand red #F44336 from the same
+  app's values/colors.xml, with Android's rounded mask baked in. Results are
+  committed so building needs no image tooling.
+  This turned up that `cmake --install` was BROKEN and nothing noticed: the
+  install rules referenced an icon set that did not exist. CI now runs
+  cmake --install and checks for the desktop entries, metainfo, icons, symbol
+  tables and the binary.
+  Still to do for M8: screenshots for the AppStream metainfo.
 M9  flatpak (Boost headers must be a declared module -- the GNOME/KDE SDKs do
     not ship them), NSIS, release job.
 M10 macOS + Windows frontends and their debugger windows.

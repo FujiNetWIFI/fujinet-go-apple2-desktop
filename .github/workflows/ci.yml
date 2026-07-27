@@ -72,6 +72,24 @@ jobs:
           test -f "$LIB" || { echo "::error::$LIB missing"; exit 1; }
           nm -D --defined-only "$LIB" | grep -q fujinet_desktop_start_runtime \
             || { echo "::error::entry points not exported"; exit 1; }
+      # `cmake --install` is not otherwise exercised by anything, and it is
+      # easy to break silently: it references the rendered icon set and the
+      # desktop/AppStream files, none of which the build itself touches. It
+      # WAS broken -- the icons did not exist -- and nothing noticed.
+      - name: Verify the install rules
+        run: |
+          cmake --install build --prefix "$RUNNER_TEMP/inst"
+          for f in \
+            share/applications/online.fujinet.go.apple2.gnome.desktop \
+            share/applications/online.fujinet.go.apple2.kde.desktop \
+            share/metainfo/online.fujinet.go.apple2.gnome.metainfo.xml \
+            share/icons/hicolor/256x256/apps/online.fujinet.go.apple2.gnome.png \
+            share/fujinet-go-apple2/symbols/APPLE2E.SYM \
+            bin/fujinet-go-apple2-gnome; do
+            test -e "$RUNNER_TEMP/inst/$f" \
+              || { echo "::error::$f was not installed"; exit 1; }
+          done
+
       # The redistributable configuration. Its own test suite includes
       # no_embedded_roms, which greps the binary for a slice of every firmware
       # image in the staged tree -- so "this build carries no Apple ROMs" is
