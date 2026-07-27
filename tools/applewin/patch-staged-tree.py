@@ -268,6 +268,20 @@ def apply_all(root):
         ),
     ])
 
+    # -- embed resources without xxd ----------------------------------------
+    # add_resources() shells out to `xxd -i in > out`. xxd is part of vim and
+    # is absent from the GNOME/KDE flatpak SDKs (which also have no network to
+    # fetch it) and from a default MSYS2 install; the shell redirection needs
+    # a shell, which a native Windows cmake does not give it either. Python is
+    # already a hard build dependency, so use it instead. The command comes in
+    # as APPLE2_XXD_I_COMMAND, set by core/CMakeLists.txt.
+    patch(root, "resource/CMakeResources.cmake", [
+        (
+            "      COMMAND xxd -i ${in_f_bin} > ${out_f_cpp}\n",
+            "      COMMAND ${APPLE2_XXD_I_COMMAND} ${in_f_bin} ${out_f_cpp}\n",
+        ),
+    ])
+
     # -- MinGW portability: std::memcpy needs <cstring> ---------------------
     # Both SmartPort files call std::memcpy without including <cstring>. On
     # Linux and macOS it arrives transitively through libstdc++'s headers; on

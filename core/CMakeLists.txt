@@ -78,6 +78,13 @@ message(STATUS "AppleWin: using Boost headers from ${Boost_INCLUDE_DIRS}")
 # redundant, and only takes effect where it is actually needed.
 include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 
+# How the staged resource/CMakeResources.cmake embeds ROMs and images. It
+# shells out to `xxd -i` upstream; the staging step rewrites that to use this,
+# because xxd is missing from the flatpak SDKs and from a default MSYS2
+# install, and the shell redirection it used needs a shell.
+set(APPLE2_XXD_I_COMMAND
+    "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/applewin/xxd-i.py")
+
 # ---- AppleWin component libraries, in dependency order ---------------------
 add_subdirectory("${AW}/libyaml"                     applewin-libyaml)
 add_subdirectory("${AW}/minizip"                     applewin-minizip)
@@ -116,12 +123,8 @@ else()
     COMMENT "Generating the external ROM loader (WITH_APPLE_ROMS=OFF)"
     VERBATIM)
 
-  # xxd the two we do embed, exactly as add_resources() would, so the symbol
+  # Embed the ones we keep exactly as add_resources() would, so the symbol
   # names the generated loader declares line up.
-  find_program(XXD_EXECUTABLE xxd)
-  if(NOT XXD_EXECUTABLE)
-    message(FATAL_ERROR "xxd is required to build with WITH_APPLE_ROMS=OFF")
-  endif()
   # Run the generator at configure time too, so the embed list is known now.
   execute_process(
     COMMAND "${Python3_EXECUTABLE}"
@@ -139,7 +142,7 @@ else()
     set(_out "${CMAKE_CURRENT_BINARY_DIR}/${_res}.cpp")
     add_custom_command(
       OUTPUT "${_out}"
-      COMMAND "${XXD_EXECUTABLE}" -i "${_res}" > "${_out}"
+      COMMAND ${APPLE2_XXD_I_COMMAND} "${_res}" "${_out}"
       WORKING_DIRECTORY "${AW}/resource"
       DEPENDS "${AW}/resource/${_res}"
       COMMENT "Embedding resource: ${_res}"

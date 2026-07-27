@@ -15,3 +15,5 @@ tools/fujinet/work/
 
 # flatpak-builder's state directory.
 .flatpak-builder/
+build-flatpak*/
+repo/

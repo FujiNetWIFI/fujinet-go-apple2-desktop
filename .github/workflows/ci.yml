@@ -16,7 +16,11 @@
 # shim, and not building the Win32-on-POSIX shim on Win32. Nothing had ever
 # compiled AppleWin's libretro frontend for MinGW before.
 #
-# The flatpak and release jobs land with the packaging work.
+# The flatpak job is the strictest test of the clone-and-build promise: the
+# sandbox has no network during the build, so anything the manifest does not
+# declare is simply absent.
+#
+# The release job lands with the rest of the packaging work.
 
 name: CI
 
@@ -38,7 +42,7 @@ jobs:
             libwebkitgtk-6.0-dev qt6-base-dev qt6-webengine-dev \
             libssl-dev libexpat1-dev zlib1g-dev libkrb5-dev libgnutls28-dev \
             libboost-dev python3-venv python3-yaml python3-jinja2 \
-            desktop-file-utils xxd
+            desktop-file-utils
       # SDL 3.4 aborts its configure when an X11 extension it enables by
       # default has no headers (3.2 quietly disabled them), so name the whole
       # set rather than depend on what the runner image happens to ship.
@@ -166,7 +170,6 @@ jobs:
             git
             make
             diffutils
-            vim
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
@@ -228,3 +231,51 @@ jobs:
             echo "$bad"
             exit 1
           fi
+
+  flatpak:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frontend: gnome
+            runtime: org.gnome.Platform
+            sdk: org.gnome.Sdk
+            version: '49'
+          - frontend: kde
+            runtime: org.kde.Platform
+            sdk: org.kde.Sdk
+            version: '6.11'
+    steps:
+      - uses: actions/checkout@v5
+      # flatpak-builder is driven directly rather than through the community
+      # container action, whose tags stop at gnome-47.
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --if-not-exists --user flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+      - name: Install the runtime
+        run: |
+          flatpak install --user -y flathub \
+            ${{ matrix.runtime }}//${{ matrix.version }} \
+            ${{ matrix.sdk }}//${{ matrix.version }}
+      # --disable-rofiles-fuse because FUSE is not available to the runner
+      # user. No preparation of the tree: the manifest declares every input,
+      # including the pinned AppleWin and FujiNet sources.
+      - name: Build
+        run: |
+          flatpak-builder --user --force-clean --disable-rofiles-fuse \
+            --repo=repo build-flatpak \
+            build-aux/flatpak/online.fujinet.go.apple2.${{ matrix.frontend }}.yml
+      - name: Bundle
+        run: |
+          flatpak build-bundle repo \
+            fujinet-go-apple2-${{ matrix.frontend }}.flatpak \
+            online.fujinet.go.apple2.${{ matrix.frontend }}
+      - name: Upload
+        uses: actions/upload-artifact@v5
+        with:
+          name: fujinet-go-apple2-${{ matrix.frontend }}-flatpak
+          path: fujinet-go-apple2-${{ matrix.frontend }}.flatpak
