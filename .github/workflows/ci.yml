@@ -1,0 +1,212 @@
+# Builds the shared core and every frontend the runner's platform supports,
+# then runs the test suite.
+#
+# The jobs deliberately do nothing to prepare the tree beyond checking it
+# out: the build fetches its pinned dependencies (AppleWin, the FujiNet
+# firmware), stages and patches the AppleWin tree, and builds the FujiNet
+# runtime itself -- so CI exercises exactly what someone cloning the
+# repository gets. If that promise ever breaks, these jobs are what notices.
+#
+# The macOS and Windows jobs are the substitute for owning those machines.
+# Neither has a native frontend yet (they land with the AppKit and Win32
+# ports), so they build the core, the staged AppleWin tree and the FujiNet
+# runtime and run the test suite. That is the part with real portability
+# risk: AppleWin's libretro frontend has never been built under MinGW --
+# upstream's cross-compile work covers its SDL2 frontend, not this one -- so
+# the Windows job is expected to need iteration.
+#
+# The flatpak and release jobs land with the packaging work.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgtk-4-dev libadwaita-1-dev \
+            libwebkitgtk-6.0-dev qt6-base-dev qt6-webengine-dev \
+            libssl-dev libexpat1-dev zlib1g-dev libkrb5-dev libgnutls28-dev \
+            libboost-dev python3-venv python3-yaml python3-jinja2 \
+            desktop-file-utils xxd
+      # SDL 3.4 aborts its configure when an X11 extension it enables by
+      # default has no headers (3.2 quietly disabled them), so name the whole
+      # set rather than depend on what the runner image happens to ship.
+      - name: Install SDL3 build dependencies
+        run: |
+          sudo apt-get install -y libx11-dev libxext-dev libxcursor-dev \
+            libxi-dev libxfixes-dev libxrandr-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libwayland-dev libdecor-0-dev libasound2-dev \
+            libpulse-dev libudev-dev libdbus-1-dev
+      - name: Build and install SDL3
+        run: |
+          git clone --depth 1 --branch release-3.4.12 \
+            https://github.com/libsdl-org/SDL.git sdl3-src
+          cmake -S sdl3-src -B sdl3-src/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF
+          cmake --build sdl3-src/build
+          sudo cmake --install sdl3-src/build
+      # No dependency preparation: this is the plain user path. The build
+      # fetches AppleWin + the FujiNet firmware and builds libfujinet.so.
+      # (Ubuntu's mbedTLS is 2.x, so the FujiNet build compiles the pinned
+      # 3.6.5 for itself.)
+      - name: Configure
+        run: cmake -B build -G Ninja
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Verify the FujiNet runtime was built and exports its entry points
+        run: |
+          LIB=tools/fujinet/work/out/libfujinet.so
+          test -f "$LIB" || { echo "::error::$LIB missing"; exit 1; }
+          nm -D --defined-only "$LIB" | grep -q fujinet_desktop_start_runtime \
+            || { echo "::error::entry points not exported"; exit 1; }
+      # The redistributable configuration. Its own test suite includes
+      # no_embedded_roms, which greps the binary for a slice of every firmware
+      # image in the staged tree -- so "this build carries no Apple ROMs" is
+      # checked rather than asserted. See COMPLIANCE.md.
+      - name: Build and test the ROM-less configuration
+        run: |
+          cmake -B build-noroms -G Ninja -DWITH_APPLE_ROMS=OFF \
+            -DWITH_FUJINET=OFF -DFRONTEND=none
+          cmake --build build-noroms
+          ctest --test-dir build-noroms --output-on-failure
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install dependencies
+        run: brew install ninja boost
+      # SDL3 is linked STATICALLY on macOS so anything shipped has no
+      # Homebrew (or other non-system) library dependencies -- a bundle that
+      # links /opt/homebrew paths only launches on machines that happen to
+      # have that formula installed.
+      - name: Build and install static SDL3
+        run: |
+          git clone --depth 1 --branch release-3.4.12 \
+            https://github.com/libsdl-org/SDL.git sdl3-src
+          cmake -S sdl3-src -B sdl3-src/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=OFF -DSDL_STATIC=ON \
+            -DSDL_TEST_LIBRARY=OFF
+          cmake --build sdl3-src/build
+          sudo cmake --install sdl3-src/build
+      # No native frontend on macOS yet, so this proves the core, the compat
+      # shims, the staged AppleWin tree and libfujinet.dylib build and pass
+      # tests on real Apple hardware. (Homebrew's mbedTLS is 4.x, which drops
+      # the legacy headers FujiNet includes, so the FujiNet build compiles
+      # the pinned 3.6.5 for itself.)
+      - name: Configure
+        run: cmake -B build -G Ninja -DFRONTEND=none
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Verify the FujiNet runtime was built and exports its entry points
+        run: |
+          LIB=tools/fujinet/work/out/libfujinet.dylib
+          test -f "$LIB" || { echo "::error::$LIB missing"; exit 1; }
+          nm -gU "$LIB" | grep -q _fujinet_desktop_start_runtime \
+            || { echo "::error::entry points not exported"; exit 1; }
+      # Every Mach-O that would ship must depend only on system libraries.
+      - name: Verify the FujiNet runtime is self-contained
+        run: |
+          LIB=tools/fujinet/work/out/libfujinet.dylib
+          otool -L "$LIB"
+          if otool -L "$LIB" | tail -n +2 | grep -E "/opt/homebrew|/usr/local"; then
+            echo "::error::non-system library leaked into libfujinet.dylib"
+            exit 1
+          fi
+
+  windows:
+    runs-on: windows-latest
+    # ADVISORY until the Win32 frontend lands. Nothing is shipped for Windows
+    # yet, and neither AppleWin's libretro frontend nor FujiNet's IWM device
+    # tree has ever been compiled for MinGW, so this job is here to tell us
+    # what breaks -- not to gate the branch on work that has not started.
+    # It MUST become required at the same time the Win32 frontend does.
+    continue-on-error: true
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            make
+            diffutils
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-yaml
+            mingw-w64-ucrt-x86_64-python-jinja
+            mingw-w64-ucrt-x86_64-mbedtls
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-expat
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-boost
+      # Static SDL3 (as on macOS) so nothing shipped needs a loose DLL --
+      # not even SDL3.dll or the MinGW runtime.
+      - name: Build and install static SDL3
+        run: |
+          git clone --depth 1 --branch release-3.4.12 \
+            https://github.com/libsdl-org/SDL.git sdl3-src
+          cmake -S sdl3-src -B sdl3-src/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=OFF -DSDL_STATIC=ON \
+            -DSDL_TEST_LIBRARY=OFF \
+            -DCMAKE_INSTALL_PREFIX=/ucrt64
+          cmake --build sdl3-src/build
+          cmake --install sdl3-src/build
+      # No native frontend on Windows yet. This is the job with the real
+      # portability risk: AppleWin's libretro frontend has never been built
+      # under MinGW, and neither has FujiNet's IWM device tree
+      # (lib/device/iwm, lib/bus/iwm) -- expect a fresh set of portability
+      # gaps there, the way the ADAM target needed a `uint` spelling and a
+      # setenv() shim in its own device tree.
+      - name: Configure
+        run: cmake -B build -G Ninja -DFRONTEND=none
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Verify the FujiNet DLL was built and exports its entry points
+        run: |
+          DLL=tools/fujinet/work/out/fujinet.dll
+          test -f "$DLL" || { echo "::error::$DLL missing"; exit 1; }
+          objdump -p "$DLL" | grep -q fujinet_desktop_start_runtime \
+            || { echo "::error::entry points not exported"; exit 1; }
+      # Checked by IMPORT TABLE rather than by ldd: ldd resolves against the
+      # build machine's PATH, where the MSYS copies exist, so it reports a
+      # dependency as satisfied that the target will not have. On the ADAM
+      # target fujinet.dll shipped importing libcrypto-3-x64.dll and zlib1.dll
+      # exactly this way -- the exe launched, LoadLibrary failed, and the
+      # machine quietly ran with no FujiNet and no error anyone could see.
+      - name: Verify the FujiNet DLL is self-contained
+        run: |
+          DLL=tools/fujinet/work/out/fujinet.dll
+          echo "--- $DLL imports ---"
+          imports=$(objdump -p "$DLL" | sed -n 's/^\s*DLL Name: //p' | sort -u)
+          echo "$imports"
+          bad=$(echo "$imports" | grep -ivE \
+            '^(api-ms-win-[a-z0-9el-]+|kernel32|user32|gdi32|advapi32|shell32|ole32|oleaut32|comctl32|comdlg32|imm32|winmm|version|setupapi|dwmapi|ws2_32|iphlpapi|bcrypt|crypt32|secur32|netapi32|userenv|dbghelp|shlwapi|msvcrt|ucrtbase|rpcrt4|winspool|uxtheme|hid|cfgmgr32|powrprof|avrt|dxgi|d3d11|opengl32)\.dll$' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "::error::$DLL imports non-system DLLs that are not shipped:"
+            echo "$bad"
+            exit 1
+          fi

@@ -509,8 +509,14 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
      *
      * Wait for the core to report itself up (AppleWin inserts the slot cards
      * during core_start, which is what binds the listener), then start
-     * FujiNet. The wait is bounded so a wedged core cannot hang the caller. */
-    if (opts->enable_fujinet) {
+     * FujiNet. The wait is bounded so a wedged core cannot hang the caller.
+     *
+     * The wait happens WHETHER OR NOT FujiNet is enabled: the caller needs to
+     * know if the machine actually came up. Waiting only for FujiNet's sake
+     * meant a session started with it disabled reported success even when the
+     * core had failed -- so a ROM-less build handed the frontend a black
+     * window and no error. */
+    {
         int up;
         pthread_mutex_lock(&s->start_mtx);
         while (s->core_started == 0) {
@@ -521,7 +527,21 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
         up = s->core_started;
         pthread_mutex_unlock(&s->start_mtx);
 
-        if (up == 1) {
+        if (up != 1) {
+            /* The emulator thread has already exited (or is wedged); reap it
+             * so a later stop() does not join a thread twice. last_error was
+             * set by the thread itself. */
+            s->stop_flag = 1;
+            pthread_join(s->emu_thread, NULL);
+            s->emu_thread_started = 0;
+            s->running = 0;
+            if (!s->last_error[0])
+                session_set_error(s, "the emulator core did not come up");
+            pthread_mutex_unlock(&s->lifecycle_mtx);
+            return -1;
+        }
+
+        if (opts->enable_fujinet) {
             /* A missing or broken runtime is not fatal: the machine still
              * boots, just with no FujiNet device on the bus. */
             if (fujinet_start(s) == 0) {
@@ -534,9 +554,6 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
                  * find the device this time. */
                 s->reset_request = 2; /* cold: re-runs the boot scan */
             }
-        } else {
-            fprintf(stderr, "apple2session: emulator core did not come up; "
-                            "starting without FujiNet\n");
         }
     }
 
