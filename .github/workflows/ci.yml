@@ -11,9 +11,10 @@
 # Neither has a native frontend yet (they land with the AppKit and Win32
 # ports), so they build the core, the staged AppleWin tree and the FujiNet
 # runtime and run the test suite. That is the part with real portability
-# risk: AppleWin's libretro frontend has never been built under MinGW --
-# upstream's cross-compile work covers its SDL2 frontend, not this one -- so
-# the Windows job is expected to need iteration.
+# risk, and it is where these jobs have already paid for themselves: getting
+# Windows green needed a <cstring> include AppleWin was missing, a setenv()
+# shim, and not building the Win32-on-POSIX shim on Win32. Nothing had ever
+# compiled AppleWin's libretro frontend for MinGW before.
 #
 # The flatpak and release jobs land with the packaging work.
 
@@ -130,12 +131,10 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    # ADVISORY until the Win32 frontend lands. Nothing is shipped for Windows
-    # yet, and neither AppleWin's libretro frontend nor FujiNet's IWM device
-    # tree has ever been compiled for MinGW, so this job is here to tell us
-    # what breaks -- not to gate the branch on work that has not started.
-    # It MUST become required at the same time the Win32 frontend does.
-    continue-on-error: true
+    # Required, not advisory. Neither AppleWin's libretro frontend nor
+    # FujiNet's IWM device tree had ever been compiled for MinGW before this
+    # repository did it; now that they build and pass, a regression here is a
+    # real regression and should fail the branch.
     defaults:
       run:
         shell: msys2 {0}
