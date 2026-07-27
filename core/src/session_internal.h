@@ -61,6 +61,7 @@ struct apple2session {
     char opt_slot3[APPLE2_OPT_MAX];
     char opt_slot4[APPLE2_OPT_MAX];
     char opt_slot5[APPLE2_OPT_MAX];
+    char opt_slot6[APPLE2_OPT_MAX];
     char opt_slot7[APPLE2_OPT_MAX];
     char opt_video_mode[APPLE2_OPT_MAX];
 

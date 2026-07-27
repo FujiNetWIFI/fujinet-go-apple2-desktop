@@ -76,6 +76,12 @@ static const char *const k_slot4[] = { "Empty", "Mockingboard", "Mouse",
                                        "Phasor", NULL };
 static const char *const k_slot5[] = { "Empty", "CP/M", "Mockingboard",
                                        "Phasor", "SAM/DAC", "FujiNet", NULL };
+/* Slot 6 is the Disk ][ controller. AppleWin hard-inserts it in
+ * CardManager's constructor and upstream exposes no core option for it, so
+ * one is added by tools/applewin/patch-staged-tree.py. It matters here
+ * because the Disk ][ ROM carries the ProDOS boot signature ($Cn07 = $3C)
+ * that the //e autostart scans for, and a SmartPort card does not. */
+static const char *const k_slot6[] = { "Disk II", "Empty", NULL };
 static const char *const k_slot7[] = { "Empty", "Hard Disk", "FujiNet", NULL };
 /* Order matters only for the menus; the default is chosen by name below. */
 static const char *const k_video_modes[] = {
@@ -104,6 +110,7 @@ const char *apple2session_machine_name(int idx) { return table_at(k_machines, id
 const char *apple2session_slot3_name(int idx)   { return table_at(k_slot3, idx); }
 const char *apple2session_slot4_name(int idx)   { return table_at(k_slot4, idx); }
 const char *apple2session_slot5_name(int idx)   { return table_at(k_slot5, idx); }
+const char *apple2session_slot6_name(int idx)   { return table_at(k_slot6, idx); }
 const char *apple2session_slot7_name(int idx)   { return table_at(k_slot7, idx); }
 const char *apple2session_video_mode_name(int idx)
 {
@@ -116,17 +123,25 @@ const char *apple2session_video_mode_name(int idx)
 static void adopt_opt(apple2session *s, char *dst, const char *const *tab,
                       const char *value, const char *def)
 {
+    const char *chosen = def;
     int i;
     (void)s;
+
     if (value) {
         for (i = 0; tab[i]; i++) {
             if (strcmp(tab[i], value) == 0) {
-                snprintf(dst, APPLE2_OPT_MAX, "%s", value);
-                return;
+                chosen = tab[i];
+                break;
             }
         }
     }
-    snprintf(dst, APPLE2_OPT_MAX, "%s", def);
+    /* Copy from the TABLE's static string, never from `value` itself.
+     * default_opts() hands back opts->slotN pointing straight at
+     * s->opt_slotN, so a start() with those opts calls this with
+     * dst == value -- and snprintf with overlapping buffers is undefined
+     * (glibc leaves dst empty). That silently blanked every core option, so
+     * the core fell back to its own defaults and slot 7 lost FujiNet. */
+    snprintf(dst, APPLE2_OPT_MAX, "%s", chosen);
 }
 
 /****************************************************************************/
@@ -245,6 +260,7 @@ static void *emu_thread_main(void *arg)
     apple2host_set_variable(OPT_PREFIX "slot3", s->opt_slot3);
     apple2host_set_variable(OPT_PREFIX "slot4", s->opt_slot4);
     apple2host_set_variable(OPT_PREFIX "slot5", s->opt_slot5);
+    apple2host_set_variable(OPT_PREFIX "slot6", s->opt_slot6);
     apple2host_set_variable(OPT_PREFIX "slot7", s->opt_slot7);
     apple2host_set_variable(OPT_PREFIX "video_mode", s->opt_video_mode);
 
@@ -404,6 +420,8 @@ void apple2session_default_opts(apple2session *s,
               apple2session_get_str(s, "slot4", NULL), "Mockingboard");
     adopt_opt(s, s->opt_slot5, k_slot5,
               apple2session_get_str(s, "slot5", NULL), "Empty");
+    adopt_opt(s, s->opt_slot6, k_slot6,
+              apple2session_get_str(s, "slot6", NULL), "Disk II");
     adopt_opt(s, s->opt_slot7, k_slot7,
               apple2session_get_str(s, "slot7", NULL), "FujiNet");
     adopt_opt(s, s->opt_video_mode, k_video_modes,
@@ -414,6 +432,7 @@ void apple2session_default_opts(apple2session *s,
     opts->slot3 = s->opt_slot3;
     opts->slot4 = s->opt_slot4;
     opts->slot5 = s->opt_slot5;
+    opts->slot6 = s->opt_slot6;
     opts->slot7 = s->opt_slot7;
     opts->video_mode = s->opt_video_mode;
     opts->enable_fujinet = 1;
@@ -436,6 +455,7 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
     adopt_opt(s, s->opt_slot3, k_slot3, opts->slot3, "Empty");
     adopt_opt(s, s->opt_slot4, k_slot4, opts->slot4, "Mockingboard");
     adopt_opt(s, s->opt_slot5, k_slot5, opts->slot5, "Empty");
+    adopt_opt(s, s->opt_slot6, k_slot6, opts->slot6, "Disk II");
     adopt_opt(s, s->opt_slot7, k_slot7, opts->slot7, "FujiNet");
     adopt_opt(s, s->opt_video_mode, k_video_modes, opts->video_mode,
               APPLE2_DEFAULT_VIDEO_MODE);
@@ -443,6 +463,7 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
     s->opts.slot3 = s->opt_slot3;
     s->opts.slot4 = s->opt_slot4;
     s->opts.slot5 = s->opt_slot5;
+    s->opts.slot6 = s->opt_slot6;
     s->opts.slot7 = s->opt_slot7;
     s->opts.video_mode = s->opt_video_mode;
 

@@ -78,6 +78,7 @@ typedef struct {
     const char *slot3;      /* "Empty" | "Video HD" */
     const char *slot4;      /* "Empty" | "Mockingboard" | "Mouse" | "Phasor" */
     const char *slot5;      /* "Empty" | "CP/M" | ... | "SAM/DAC" | "FujiNet" */
+    const char *slot6;      /* "Disk II" | "Empty" -- see the note below */
     const char *slot7;      /* "Empty" | "Hard Disk" | "FujiNet" */
     /* How the video signal is rendered. NOTE: the core's own default is
      * "Color (RGB Card/Monitor)", which emulates an RGB card -- on a machine
@@ -103,6 +104,7 @@ const char *apple2session_machine_name(int idx);
 const char *apple2session_slot3_name(int idx);
 const char *apple2session_slot4_name(int idx);
 const char *apple2session_slot5_name(int idx);
+const char *apple2session_slot6_name(int idx);
 const char *apple2session_slot7_name(int idx);
 const char *apple2session_video_mode_name(int idx);
 

@@ -195,6 +195,7 @@ OPTION_TABLE(apple2session_machine_name, machine)
 OPTION_TABLE(apple2session_slot3_name, slot3)
 OPTION_TABLE(apple2session_slot4_name, slot4)
 OPTION_TABLE(apple2session_slot5_name, slot5)
+OPTION_TABLE(apple2session_slot6_name, slot6)
 OPTION_TABLE(apple2session_slot7_name, slot7)
 OPTION_TABLE(apple2session_video_mode_name, video_mode)
 
@@ -239,6 +240,9 @@ void apple2_prefs_show(Apple2Window *parent, apple2session *session,
                              "Mockingboard"));
     adw_preferences_group_add(
         slots, combo_row_str(state, "Slot 5", "slot5", slot5_table(), "Empty"));
+    adw_preferences_group_add(
+        slots, combo_row_str(state, "Slot 6", "slot6", slot6_table(),
+                             "Disk II"));
     adw_preferences_group_add(
         slots, combo_row_str(state, "Slot 7", "slot7", slot7_table(),
                              "FujiNet"));

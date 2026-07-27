@@ -72,7 +72,7 @@ M2 -- clone-and-build verified two ways:
   * a tree with .git and third_party/* removed takes the clone-the-pin branch
     of apple2_provide_dependency and builds; ctest green.
 
-M3 -- FujiNet in-process. THE BUS IS UP; CONFIG DOES NOT BOOT YET.
+M3 -- FujiNet in-process. DONE: CONFIG BOOTS.
 
   Working:
   * tools/fujinet/build-fujinet-desktop.sh forked from adam's, PC_TARGET=APPLE,
@@ -110,21 +110,30 @@ M3 -- FujiNet in-process. THE BUS IS UP; CONFIG DOES NOT BOOT YET.
     Apple2 as having "forgiving" ordering like ADAM -- that is wrong, and the
     guide is worth correcting.
 
-  NOT working -- the next thing to do:
-  * The machine sits at the "Apple //e" banner and never boots FujiNet CONFIG,
-    even though the SmartPort dialogue is happening. Leads:
-      - the INIT response reports "status: 255, num: 0" and enumerates drives
-        as unit 0d/0e, which looks wrong for a first device;
-      - check whether the //e autostart actually enters the slot-7 spoverslip
-        firmware, or falls through to the Disk ][ in slot 6 (before the card
-        was inserted the CPU sat at $C65E, inside that ROM);
-      - a post-connect cold reset was tried and does NOT fix it;
-      - compare the SmartPort dialogue against the known-good standalone
-        fujinet-pc-apple2 driving a real AppleWin (sa2) build.
+  * A THIRD defect, and the one that actually kept CONFIG from booting: our
+    own adopt_opt() copied with snprintf(dst, n, "%s", value) where dst and
+    value could be THE SAME BUFFER -- default_opts() hands back
+    opts->slotN pointing straight at s->opt_slotN, so start() aliased them.
+    Overlapping snprintf is undefined; glibc left the option empty, our
+    GET_VARIABLE returns false for an empty value, and the core silently fell
+    back to its own defaults -- slot 7 "Empty", so no FujiNet card at all.
+    Being UB it was INTERMITTENT, which is why the bus sometimes came up.
+    adopt_opt now copies from the option table's static string, never from
+    the caller's pointer.
+
+  Verified end to end: the Apple //e boots FujiNet CONFIG -- host list,
+  SmartPort drive table and the full menu bar -- with the SLIP bus carrying
+  the traffic. ctest green.
+
+  Follow-ups:
   * fnconfig.ini is still the Android app's ATARI default (hsioindex,
-    [Cassette], enable_apetime, Atari TNFS hosts). Curate it for Apple II.
+    [Cassette], enable_apetime, and Atari TNFS hosts, which is what CONFIG's
+    host list shows). Curate it for Apple II.
   * Web UI port 8000 collides with a standalone fujinet-pc-atari on this
-    machine; FUJINET_WEBUI_BIND overrides it for testing.
+    machine; FUJINET_WEBUI_BIND overrides it.
+  * A new "slot6" core option was added (upstream has none; AppleWin
+    hard-inserts a Disk ][ in CardManager's constructor) so the Disk ][ can be
+    removed. Default "Disk II".
 
 Next
 ----
