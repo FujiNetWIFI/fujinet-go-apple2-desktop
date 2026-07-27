@@ -305,9 +305,32 @@ M10 -- Windows frontend DONE; macOS remains.
 
 Next
 ----
-M6  remaining: Apple II video views (text / lo-res / hi-res page decoders) to
-    replace adam's vdpview.c, and the corresponding panes in the three
-    debugger windows.
+M6 -- DONE. core/debugger/a2video.c decodes text, lo-res and hi-res, pages 1
+    and 2, to XRGB8888, with a pane in all four debugger windows.
+    The whole file is one idea: Apple II screen rows are INTERLEAVED, so row 1
+    is not 40 bytes after row 0 (Woz did that so the video counter fell out of
+    a few gates instead of an address adder). A decoder that gets it wrong
+    still draws a plausible picture, just scrambled -- so video_test pins the
+    three text bands and hi-res's extra scanline interleave specifically, and
+    the test was mutation-checked: naive linear rows, a dropped hi-res
+    interleave and swapped lo-res nibbles are each caught.
+    tools/debugger/genfont.py holds the 64 character-generator glyphs as ASCII
+    art and prints a render-back so they can be eyeballed; the generated table
+    is committed, as the icons are.
+    KNOWN DIVERGENCE: the font is the ORIGINAL 64-glyph character generator,
+    so lowercase folds to uppercase -- the view can read APPLE //E where the
+    machine's own screen reads Apple //e. Rendering that faithfully means
+    tracking the ALTCHARSET soft switch, and this is deliberately a page
+    inspector rather than a second display emulator.
+    LAYOUT NOTE: stacking registers + memory + video in one column does not
+    survive a tiling window manager -- the bottom pane falls off, and an
+    enclosing QScrollArea did NOT reliably rescue it. Qt tabs memory and video
+    instead; Win32 and AppKit give the video pane a fixed slot at the bottom
+    and let the memory dump take what is left; GTK scrolls the column.
+    APPLE2_DEBUGGER_VIEW=N opens on a given page (0 text 1, 4 hi-res 1), which
+    is also how the panes were verified: GNOME and KDE show the FujiNet splash
+    decoded out of $2000, and the Win32 one under wine shows APPLE //E decoded
+    out of $0400.
 M10 macOS: WRITTEN, verified only by the macOS CI job -- there is no Mac here.
     frontends/macos: AppKit over the shared session. Same two deliberate
     differences as the Win32 one: no pixel conversion (XRGB8888 is exactly

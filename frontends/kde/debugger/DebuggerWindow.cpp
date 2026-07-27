@@ -26,6 +26,7 @@
 #include <QShortcut>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QToolBar>
 #include <QVBoxLayout>
 
@@ -92,6 +93,7 @@ DebuggerWindow::DebuggerWindow(apple2session *session, QWidget *parent)
     /* Open paused on purpose: a debugger that opens on a running machine
      * shows a disassembly that is stale before it is drawn. */
     apple2debug_pause(m_dbg);
+
     refreshAll();
 }
 
@@ -182,17 +184,57 @@ void DebuggerWindow::buildUi()
     auto *regLayout = new QVBoxLayout(regBox);
     regLayout->addWidget(m_regs);
 
-    auto *memBox = new QGroupBox(QStringLiteral("Memory"), this);
+    /* Video page viewer. The page list comes from the engine, so a view added
+     * there shows up here with no edit. */
+    m_viewFb.assign((size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT, 0);
+    m_viewPick = new QComboBox(this);
+    for (int i = 0; apple2debug_view_name(i); i++)
+        m_viewPick->addItem(QString::fromUtf8(apple2debug_view_name(i)));
+    connect(m_viewPick, &QComboBox::currentIndexChanged, this,
+            [this](int) { renderVideo(); });
+
+    m_viewPic = new QLabel(this);
+    m_viewPic->setFixedSize(APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT);
+    m_viewPic->setStyleSheet(QStringLiteral("background: black;"));
+
+    auto *memBox = new QWidget(this);
     auto *memLayout = new QVBoxLayout(memBox);
     memLayout->addWidget(m_memAddr);
     memLayout->addWidget(m_mem);
-    memLayout->addStretch();
+
+    auto *videoPage = new QWidget(this);
+    auto *videoLayout = new QVBoxLayout(videoPage);
+    videoLayout->addWidget(m_viewPick);
+    videoLayout->addWidget(m_viewPic);
+    videoLayout->addStretch(1);
+
+    /* Memory and the video page are TABBED rather than stacked. Stacked, they
+     * compete for a column whose height is not ours to choose -- under a
+     * tiling window manager the window is whatever height the tile is, and
+     * the lower pane simply falls off the bottom (with the enclosing scroll
+     * area not reliably rescuing it). Tabbed, each gets the full column and
+     * neither can push the other out. */
+    auto *tabs = new QTabWidget(this);
+    tabs->addTab(memBox, QStringLiteral("Memory"));
+    tabs->addTab(videoPage, QStringLiteral("Video"));
+
+    /* Dev affordance, like APPLE2_OPEN_DEBUGGER: land on a given video page
+     * (an index into apple2debug_view_name) instead of the memory view. */
+    {
+        bool ok = false;
+        const int idx =
+            qEnvironmentVariableIntValue("APPLE2_DEBUGGER_VIEW", &ok);
+        if (ok && idx >= 0 && idx < APPLE2VIEW_COUNT) {
+            m_viewPick->setCurrentIndex(idx);
+            tabs->setCurrentWidget(videoPage);
+        }
+    }
 
     auto *right = new QWidget(this);
     auto *rightLayout = new QVBoxLayout(right);
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->addWidget(regBox);
-    rightLayout->addWidget(memBox, 1);
+    rightLayout->addWidget(tabs, 1);
 
     /* Scrolled, so the right pane's natural width never becomes a hard
      * minimum the splitter has to honour at the disassembly's expense.
@@ -336,6 +378,31 @@ void DebuggerWindow::renderMem()
     m_mem->setText(out);
 }
 
+/* Decode whichever video page the combo names. This shows a PAGE, not what
+ * the machine is currently displaying -- which is the point: it is how you see
+ * the buffer a program is drawing into before it flips to it. */
+void DebuggerWindow::renderVideo()
+{
+    if (!m_dbg || !m_viewPic)
+        return;
+    const int sel = m_viewPick->currentIndex();
+    if (sel < 0)
+        return;
+    if (apple2debug_render_view(m_dbg, (apple2debug_view)sel,
+                                m_viewFb.data()) != 0)
+        return;
+
+    /* Format_RGB32 is 0xffRRGGBB, and the engine hands out 0x00RRGGBB -- the
+     * same bytes with the ignored top octet zeroed, so no conversion. */
+    const QImage img((const uchar *)m_viewFb.data(), APPLE2VIEW_WIDTH,
+                     APPLE2VIEW_HEIGHT, APPLE2VIEW_WIDTH * 4,
+                     QImage::Format_RGB32);
+    /* copy(), because the QImage above is a view over m_viewFb and the label
+     * outlives this call. Nearest-neighbour on purpose: this is a pixel
+     * inspector, so smoothing would hide what is being inspected. */
+    m_viewPic->setPixmap(QPixmap::fromImage(img.copy()));
+}
+
 void DebuggerWindow::refreshAll()
 {
     if (!m_dbg) return;
@@ -345,6 +412,7 @@ void DebuggerWindow::refreshAll()
     renderRegs();
     renderDisasm();
     renderMem();
+    renderVideo();
 }
 
 void DebuggerWindow::toggleRun()

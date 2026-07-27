@@ -17,8 +17,11 @@
 
 #import "DebuggerWindow.h"
 
+#import <QuartzCore/QuartzCore.h>
+
 #include <float.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "apple2debug.h"
@@ -76,6 +79,10 @@ static DebuggerWindow *g_debugger;
     NSTextField *_memAddr;
     NSTextView *_memView;
     uint16_t _memBase;
+
+    NSPopUpButton *_viewPick;
+    NSImageView *_viewPic;
+    uint32_t *_viewFb;
 
     NSTimer *_tick;
     id _keyMonitor;
@@ -240,11 +247,43 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     _memAddr.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     [root addSubview:_memAddr];
 
-    NSScrollView *memScroll = monoScroll(
-        [NSTextView class], NSMakeRect(rx, 12, rw, memAddrY - 12 - 8));
+    /* The video pane is a fixed 280x192 plus its popup and sits at the bottom
+     * of the column; the memory dump takes whatever is left above it, so
+     * neither can squeeze the other out. */
+    const CGFloat videoH = APPLE2VIEW_HEIGHT + 34;
+    CGFloat memH = memAddrY - 12 - 8 - videoH;
+    if (memH < 60)
+        memH = 60;
+
+    NSScrollView *memScroll =
+        monoScroll([NSTextView class], NSMakeRect(rx, 12 + videoH, rw, memH));
     memScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _memView = memScroll.documentView;
     [root addSubview:memScroll];
+
+    /* Video page viewer. The page list comes from the engine, so a view added
+     * there shows up here with no edit. */
+    _viewFb = calloc((size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT,
+                     sizeof(uint32_t));
+    _viewPick = [[NSPopUpButton alloc]
+        initWithFrame:NSMakeRect(rx, 12 + APPLE2VIEW_HEIGHT + 6, rw, 25)];
+    for (int i = 0; apple2debug_view_name(i); i++)
+        [_viewPick addItemWithTitle:@(apple2debug_view_name(i))];
+    _viewPick.target = self;
+    _viewPick.action = @selector(viewPickChanged:);
+    _viewPick.autoresizingMask = NSViewWidthSizable;
+    [root addSubview:_viewPick];
+
+    _viewPic = [[NSImageView alloc]
+        initWithFrame:NSMakeRect(rx, 12, APPLE2VIEW_WIDTH,
+                                 APPLE2VIEW_HEIGHT)];
+    /* Nearest-neighbour and no scaling: this is a pixel inspector, so
+     * smoothing would hide the thing being inspected. */
+    _viewPic.imageScaling = NSImageScaleNone;
+    _viewPic.wantsLayer = YES;
+    _viewPic.layer.backgroundColor = NSColor.blackColor.CGColor;
+    _viewPic.layer.magnificationFilter = kCAFilterNearest;
+    [root addSubview:_viewPic];
 
     [_window center];
 
@@ -271,6 +310,17 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
         _status.stringValue = @"No debugger (the session is not running)";
     }
 
+    /* Dev affordance, like APPLE2_OPEN_DEBUGGER: land on a given video page
+     * (an index into apple2debug_view_name) instead of text page 1. */
+    {
+        const char *v = getenv("APPLE2_DEBUGGER_VIEW");
+        if (v && *v) {
+            const int idx = atoi(v);
+            if (idx >= 0 && idx < APPLE2VIEW_COUNT)
+                [_viewPick selectItemAtIndex:idx];
+        }
+    }
+
     /* While the machine runs, keep the registers live but leave the
      * disassembly and memory alone -- they would be stale before they were
      * drawn, and re-rendering them fights with scrolling. */
@@ -289,6 +339,7 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     [_tick invalidate];
     if (_keyMonitor)
         [NSEvent removeMonitor:_keyMonitor];
+    free(_viewFb);
     if (_dbg)
         apple2debug_set_stop_callback(_dbg, NULL, NULL);
 }
@@ -390,6 +441,47 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     _memView.string = out;
 }
 
+/* Decode whichever page the popup names. This shows a PAGE, not what the
+ * machine is currently displaying -- which is the point: it is how you see the
+ * buffer a program is drawing into before it flips to it. */
+- (void)renderVideo
+{
+    if (!_dbg || !_viewFb || !_viewPic)
+        return;
+    const NSInteger sel = _viewPick.indexOfSelectedItem;
+    if (sel < 0)
+        return;
+    if (apple2debug_render_view(_dbg, (apple2debug_view)sel, _viewFb) != 0)
+        return;
+
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGDataProviderRef provider = CGDataProviderCreateWithData(
+        NULL, _viewFb,
+        (size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT * 4, NULL);
+    /* Same reasoning as DisplayView: XRGB8888 as a little-endian 32-bit word
+     * is exactly "skip the first component, byte order 32 little". */
+    CGImageRef image = CGImageCreate(
+        APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT, 8, 32, APPLE2VIEW_WIDTH * 4,
+        space, kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little,
+        provider, NULL, false, kCGRenderingIntentDefault);
+    CGDataProviderRelease(provider);
+    CGColorSpaceRelease(space);
+    if (!image)
+        return;
+
+    NSImage *img = [[NSImage alloc]
+        initWithCGImage:image
+                   size:NSMakeSize(APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT)];
+    CGImageRelease(image);
+    _viewPic.image = img;
+}
+
+- (void)viewPickChanged:(id)sender
+{
+    (void)sender;
+    [self renderVideo];
+}
+
 - (void)refreshAll
 {
     if (!_dbg)
@@ -398,6 +490,7 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     [self renderRegs];
     [self renderDisasm];
     [self renderMem];
+    [self renderVideo];
 }
 
 - (void)onTick

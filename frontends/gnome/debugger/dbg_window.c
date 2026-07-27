@@ -37,6 +37,9 @@ typedef struct {
     GtkListBox *disasm;
     GtkLabel *mem;
     GtkEntry *mem_entry;
+    GtkDropDown *view_pick;
+    GtkPicture *view_pic;
+    uint32_t *view_fb;
 
     uint16_t disasm_at;   /* address the listing currently starts at */
     uint16_t mem_at;
@@ -45,7 +48,49 @@ typedef struct {
 
 static DbgWindow *g_dbg; /* one window per process */
 
+/* The engine's XRGB8888 is a uint32 0x00RRGGBB, so on a little-endian host
+ * the bytes run B,G,R,X -- exactly GDK_MEMORY_B8G8R8X8, with no conversion.
+ * Same reasoning as display.c, which paints the machine's own frame. */
+#if G_BYTE_ORDER == G_BIG_ENDIAN
+#define APPLE2_GDK_FORMAT GDK_MEMORY_X8R8G8B8
+#else
+#define APPLE2_GDK_FORMAT GDK_MEMORY_B8G8R8X8
+#endif
+
 /* ---- rendering ----------------------------------------------------------- */
+
+/* Decode whichever video page the dropdown names. This shows a PAGE, not what
+ * the machine is currently displaying -- which is the point: it is how you see
+ * the buffer a program is drawing into before it flips to it. */
+static void render_video(DbgWindow *w)
+{
+    GdkTexture *tex;
+    GBytes *bytes;
+    guint sel;
+
+    if (!w->view_fb || !w->view_pic)
+        return;
+    sel = gtk_drop_down_get_selected(w->view_pick);
+    if (sel == GTK_INVALID_LIST_POSITION)
+        sel = 0;
+    if (apple2debug_render_view(w->dbg, (apple2debug_view)sel, w->view_fb) != 0)
+        return;
+
+    bytes = g_bytes_new(w->view_fb, (gsize)APPLE2VIEW_WIDTH *
+                                        APPLE2VIEW_HEIGHT * sizeof(uint32_t));
+    tex = gdk_memory_texture_new(APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT,
+                                 APPLE2_GDK_FORMAT, bytes,
+                                 (gsize)APPLE2VIEW_WIDTH * sizeof(uint32_t));
+    g_bytes_unref(bytes);
+    gtk_picture_set_paintable(w->view_pic, GDK_PAINTABLE(tex));
+    g_object_unref(tex);
+}
+
+static void on_view_changed(GObject *obj, GParamSpec *spec, gpointer user_data)
+{
+    (void)obj; (void)spec;
+    render_video((DbgWindow *)user_data);
+}
 
 static void render_regs(DbgWindow *w)
 {
@@ -165,6 +210,7 @@ static void refresh_all(DbgWindow *w)
     render_regs(w);
     render_disasm(w);
     render_mem(w);
+    render_video(w);
 }
 
 /* ---- the stop callback --------------------------------------------------- */
@@ -289,6 +335,7 @@ static void on_destroy(GtkWidget *widget, gpointer user_data)
     apple2debug_set_stop_callback(w->dbg, NULL, NULL);
     apple2debug_resume(w->dbg);
     if (g_dbg == w) g_dbg = NULL;
+    g_free(w->view_fb);
     g_free(w);
 }
 
@@ -325,7 +372,7 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
 
     w->win = GTK_WINDOW(adw_window_new());
     gtk_window_set_title(w->win, "Debugger");
-    gtk_window_set_default_size(w->win, 900, 680);
+    gtk_window_set_default_size(w->win, 1180, 780);
     gtk_window_set_transient_for(w->win, parent);
     g_signal_connect(w->win, "destroy", G_CALLBACK(on_destroy), w);
 
@@ -380,15 +427,56 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
     gtk_box_append(GTK_BOX(membox), GTK_WIDGET(w->mem_entry));
     gtk_box_append(GTK_BOX(membox), GTK_WIDGET(w->mem));
 
-    right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
-    gtk_widget_set_margin_end(right, 12);
-    gtk_box_append(GTK_BOX(right), GTK_WIDGET(w->regs));
-    gtk_box_append(GTK_BOX(right), membox);
+    /* Video page viewer. The list of pages comes from the engine, so a view
+     * added there shows up here with no edit. */
+    {
+        GtkStringList *views = gtk_string_list_new(NULL);
+        GtkWidget *videobox;
+        int i;
 
-    split = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_paned_set_start_child(GTK_PANED(split), left);
-    gtk_paned_set_end_child(GTK_PANED(split), right);
-    gtk_paned_set_position(GTK_PANED(split), 480);
+        for (i = 0; apple2debug_view_name(i); i++)
+            gtk_string_list_append(views, apple2debug_view_name(i));
+
+        w->view_pick = GTK_DROP_DOWN(
+            gtk_drop_down_new(G_LIST_MODEL(views), NULL));
+        g_signal_connect(w->view_pick, "notify::selected",
+                         G_CALLBACK(on_view_changed), w);
+
+        w->view_fb = g_new0(uint32_t, (gsize)APPLE2VIEW_WIDTH *
+                                          APPLE2VIEW_HEIGHT);
+        w->view_pic = GTK_PICTURE(gtk_picture_new());
+        /* Nearest-neighbour and a fixed size: this is a pixel inspector, so
+         * smoothing it would hide the thing being inspected. */
+        gtk_picture_set_content_fit(w->view_pic, GTK_CONTENT_FIT_CONTAIN);
+        gtk_widget_set_size_request(GTK_WIDGET(w->view_pic),
+                                    APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT);
+
+        videobox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+        gtk_box_append(GTK_BOX(videobox), GTK_WIDGET(w->view_pick));
+        gtk_box_append(GTK_BOX(videobox), GTK_WIDGET(w->view_pic));
+
+        right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+        gtk_widget_set_margin_end(right, 12);
+        gtk_box_append(GTK_BOX(right), GTK_WIDGET(w->regs));
+        gtk_box_append(GTK_BOX(right), membox);
+        gtk_box_append(GTK_BOX(right), videobox);
+    }
+
+    {
+        /* Scrolled: the right column carries registers, memory and a 280x192
+         * video page, which together want more height than a small window
+         * has. Without this the video pane is what gets squeezed to nothing. */
+        GtkWidget *rscroll = gtk_scrolled_window_new();
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(rscroll), right);
+        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(rscroll),
+                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+        split = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+        gtk_paned_set_start_child(GTK_PANED(split), left);
+        gtk_paned_set_end_child(GTK_PANED(split), rscroll);
+        gtk_paned_set_position(GTK_PANED(split), 470);
+        gtk_paned_set_resize_start_child(GTK_PANED(split), TRUE);
+        gtk_paned_set_resize_end_child(GTK_PANED(split), FALSE);
+    }
 
     tbview = adw_toolbar_view_new();
     adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(tbview), header);
@@ -406,6 +494,16 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
      * disassembly that is already stale by the time it is drawn. */
     w->mem_at = 0x0400; /* the text page: something recognisable to land on */
     w->follow_pc = 1;
+    /* Dev affordance, like APPLE2_OPEN_DEBUGGER: land on a given video page
+     * (an index into apple2debug_view_name) instead of text page 1. */
+    {
+        const char *v = getenv("APPLE2_DEBUGGER_VIEW");
+        if (v && *v) {
+            int idx = atoi(v);
+            if (idx >= 0 && idx < APPLE2VIEW_COUNT)
+                gtk_drop_down_set_selected(w->view_pick, (guint)idx);
+        }
+    }
     apple2debug_pause(w->dbg);
     refresh_all(w);
 

@@ -5,11 +5,14 @@
 
 #pragma once
 
+#include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMainWindow>
 #include <QPushButton>
+
+#include <vector>
 
 #include "apple2debug.h"
 #include "apple2session.h"
@@ -34,6 +37,7 @@ private:
     void renderRegs();
     void renderDisasm();
     void renderMem();
+    void renderVideo();
     void refreshAll();
     void toggleRun();
 
@@ -46,6 +50,9 @@ private:
     QListWidget *m_disasm = nullptr;
     QLabel *m_mem = nullptr;
     QLineEdit *m_memAddr = nullptr;
+    QComboBox *m_viewPick = nullptr;
+    QLabel *m_viewPic = nullptr;
+    std::vector<uint32_t> m_viewFb;
 
     quint16 m_disasmAt = 0;
     quint16 m_memAt = 0x0400;

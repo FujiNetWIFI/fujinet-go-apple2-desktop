@@ -95,9 +95,17 @@ static uint16_t hires_row_addr(uint16_t base, int y)
  *   $40-$7F  flashing -- drawn steady here; a blinking debugger view is a
  *            worse debugger view
  *   $80-$FF  normal
- * The character generator holds only $20-$5F, so control codes fold up into
- * the @A-Z[\]^_ range and lowercase folds to uppercase, which is exactly what
- * an unenhanced II or II+ puts on the screen. */
+ *
+ * The font here is the ORIGINAL character generator: 64 glyphs, $20-$5F, so
+ * control codes fold up into @A-Z[\]^_ and lowercase folds to uppercase.
+ *
+ * KNOWN DIVERGENCE: a //e with its alternate character set enabled really
+ * does show lowercase, so this view can read APPLE //E where the machine's
+ * own screen reads Apple //e. Rendering that faithfully means tracking the
+ * ALTCHARSET soft switch, and this is deliberately a page inspector rather
+ * than a second display emulator -- it decodes bytes at an address, not the
+ * video hardware's current state. Folding to uppercase is what those bytes
+ * mean with the primary character set, and it stays legible either way. */
 static int glyph_index(uint8_t b, int *inverse)
 {
     uint8_t c = (uint8_t)(b & 0x7F);

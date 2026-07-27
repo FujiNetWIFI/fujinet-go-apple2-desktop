@@ -20,8 +20,7 @@ follows.
 > debugger with its own native window on all four frontends. Linux, macOS,
 > Windows and both flatpaks are green in CI, which also builds the Windows
 > installer and the macOS bundle and can cut a release. Still to come: the
-> Apple II video views in the debugger, and code signing for the macOS
-> bundle. See `TODO`.
+> code signing for the macOS bundle. See `TODO`.
 
 ## Building
 
@@ -100,7 +99,10 @@ how every menu shortcut on the system is typed, and swallowing it would cost
 you ⌘Q and ⌘W. Full screen is ⌃⌘F.
 
 In the debugger: **F5** pause/continue, **F7** step into, **F8** step over,
-**Shift+F8** step out; click a disassembly line to toggle a breakpoint.
+**Shift+F8** step out; click a disassembly line to toggle a breakpoint. The
+video pane decodes a text, lo-res or hi-res **page** — which is not the same
+as what the machine is displaying, and is the point: it shows the buffer a
+program is drawing into before it flips to it.
 
 ## Diagnostics
 
@@ -108,6 +110,8 @@ In the debugger: **F5** pause/continue, **F7** step into, **F8** step over,
 |---|---|
 | `APPLE2_PACE_LOG=1` | once-per-second frame pacing: fps, frames behind, frames on vsync |
 | `APPLE2_ROM_DIR` | where a `WITH_APPLE_ROMS=OFF` build reads system ROMs |
+| `APPLE2_OPEN_DEBUGGER=1` | open the debugger window at launch |
+| `APPLE2_DEBUGGER_VIEW=N` | open the debugger on video page N (0 = text page 1, 4 = hi-res page 1) |
 | `FUJINET_LIB` | explicit path to `libfujinet.so`/`.dylib`/`.dll` |
 | `FUJINET_WEBUI_BIND` | override the web admin bind address (default `127.0.0.1`) |
 

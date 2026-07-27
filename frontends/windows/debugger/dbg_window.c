@@ -44,6 +44,7 @@ enum {
     IDC_PAUSE = 1000, IDC_STEP_IN, IDC_STEP_OVER, IDC_STEP_OUT,
     IDC_STATUS, IDC_DISASM, IDC_REGS, IDC_REG_LABEL,
     IDC_MEM_LABEL, IDC_MEM_ADDR, IDC_MEM_VIEW,
+    IDC_VIEW_PICK, IDC_VIEW_PIC,
     IDC_LABEL_FIRST /* statics that only carry text */
 };
 
@@ -53,6 +54,8 @@ typedef struct {
     HWND disasm;
     HWND reg_label, regs;
     HWND mem_label, mem_addr, mem_view;
+    HWND view_pick, view_pic;
+    uint32_t *view_fb;
 
     HFONT mono;
     HACCEL accel;
@@ -71,6 +74,67 @@ typedef struct {
 } debugger;
 
 static debugger *g_dbg;
+
+/* ---- video page view ------------------------------------------------------
+ * A small owner-drawn window: the engine's XRGB8888 is byte-for-byte what a
+ * 32bpp BI_RGB DIB wants, so StretchDIBits reads the buffer as it stands --
+ * the same deal the main window's display gets. */
+
+static LRESULT CALLBACK pixels_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    debugger *d = (debugger *)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT c;
+        BITMAPINFO bmi;
+
+        GetClientRect(hwnd, &c);
+        if (d && d->view_fb) {
+            memset(&bmi, 0, sizeof(bmi));
+            bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+            bmi.bmiHeader.biWidth = APPLE2VIEW_WIDTH;
+            bmi.bmiHeader.biHeight = -APPLE2VIEW_HEIGHT; /* top-down */
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+            /* Nearest-neighbour: this is a pixel inspector, so smoothing it
+             * would hide the thing being inspected. */
+            SetStretchBltMode(hdc, COLORONCOLOR);
+            StretchDIBits(hdc, 0, 0, c.right, c.bottom, 0, 0,
+                          APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT, d->view_fb,
+                          &bmi, DIB_RGB_COLORS, SRCCOPY);
+        } else {
+            FillRect(hdc, &c, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+}
+
+/* Decode whichever page the combo names. This shows a PAGE, not what the
+ * machine is currently displaying -- which is the point: it is how you see the
+ * buffer a program is drawing into before it flips to it. */
+static void render_video(debugger *d)
+{
+    int sel;
+
+    if (!d->dbg || !d->view_fb || !d->view_pic)
+        return;
+    sel = (int)SendMessageA(d->view_pick, CB_GETCURSEL, 0, 0);
+    if (sel < 0)
+        sel = 0;
+    if (apple2debug_render_view(d->dbg, (apple2debug_view)sel,
+                                d->view_fb) != 0)
+        return;
+    InvalidateRect(d->view_pic, NULL, FALSE);
+}
 
 /* ---- rendering ----------------------------------------------------------- */
 
@@ -180,6 +244,7 @@ static void refresh_all(debugger *d)
     render_regs(d);
     render_disasm(d);
     render_mem(d);
+    render_video(d);
 }
 
 /* ---- actions ------------------------------------------------------------- */
@@ -308,6 +373,8 @@ static HWND mono_view(debugger *d, int id, DWORD extra)
 
 static void build_controls(debugger *d)
 {
+    int i;
+
     d->pause_btn = child(d, "BUTTON", "Pause", BS_PUSHBUTTON, IDC_PAUSE);
     d->step_in = child(d, "BUTTON", "Into (F7)", BS_PUSHBUTTON, IDC_STEP_IN);
     d->step_over = child(d, "BUTTON", "Over (F8)", BS_PUSHBUTTON,
@@ -332,6 +399,21 @@ static void build_controls(debugger *d)
     g_edit_proc = (WNDPROC)SetWindowLongPtrA(d->mem_addr, GWLP_WNDPROC,
                                              (LONG_PTR)edit_subclass);
     d->mem_view = mono_view(d, IDC_MEM_VIEW, WS_VSCROLL | ES_AUTOVSCROLL);
+
+    /* Video page viewer. The page list comes from the engine, so a view added
+     * there shows up here with no edit. */
+    d->view_pick = child(d, "COMBOBOX", "",
+                         CBS_DROPDOWNLIST | WS_VSCROLL, IDC_VIEW_PICK);
+    for (i = 0; apple2debug_view_name(i); i++)
+        SendMessageA(d->view_pick, CB_ADDSTRING, 0,
+                     (LPARAM)apple2debug_view_name(i));
+    SendMessageA(d->view_pick, CB_SETCURSEL, 0, 0);
+
+    d->view_fb = (uint32_t *)calloc((size_t)APPLE2VIEW_WIDTH *
+                                        APPLE2VIEW_HEIGHT,
+                                    sizeof(uint32_t));
+    d->view_pic = child(d, "Apple2DbgPixels", "", 0, IDC_VIEW_PIC);
+    SetWindowLongPtrA(d->view_pic, GWLP_USERDATA, (LONG_PTR)d);
 }
 
 static void layout(debugger *d)
@@ -374,7 +456,23 @@ static void layout(debugger *d)
     ry += 20;
     MoveWindow(d->mem_addr, rx, ry, rw, 22, TRUE);
     ry += 28;
-    MoveWindow(d->mem_view, rx, ry, rw, body_y + body_h - ry, TRUE);
+
+    /* The memory dump takes what is left after the video pane below it, which
+     * is a fixed 280x192 plus its combo -- so it can never be squeezed out.
+     * (Stacking it and letting the memory view take the slack is exactly how
+     * it got pushed off the bottom in the Qt window.) */
+    {
+        const int video_h = APPLE2VIEW_HEIGHT + 30;
+        int mem_h = body_y + body_h - ry - video_h - 8;
+        if (mem_h < 60)
+            mem_h = 60;
+        MoveWindow(d->mem_view, rx, ry, rw, mem_h, TRUE);
+        ry += mem_h + 8;
+        MoveWindow(d->view_pick, rx, ry, rw, 200, TRUE);
+        ry += 26;
+        MoveWindow(d->view_pic, rx, ry, APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT,
+                   TRUE);
+    }
 }
 
 /* ---- window proc --------------------------------------------------------- */
@@ -409,6 +507,10 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_STEP_IN:   if (d->dbg) apple2debug_step_into(d->dbg); return 0;
         case IDC_STEP_OVER: if (d->dbg) apple2debug_step_over(d->dbg); return 0;
         case IDC_STEP_OUT:  if (d->dbg) apple2debug_step_out(d->dbg); return 0;
+        case IDC_VIEW_PICK:
+            if (HIWORD(wp) == CBN_SELCHANGE)
+                render_video(d);
+            return 0;
         case IDC_DISASM:
             if (HIWORD(wp) == LBN_SELCHANGE && d->dbg) {
                 int sel = (int)SendMessageA(d->disasm, LB_GETCURSEL, 0, 0);
@@ -435,6 +537,7 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         if (d->accel)
             DestroyAcceleratorTable(d->accel);
+        free(d->view_fb);
         DeleteObject(d->mono);
         free(d);
         g_dbg = NULL;
@@ -466,6 +569,13 @@ void apple2_debugger_show(HWND parent, apple2session *session)
     InitCommonControlsEx(&icc);
 
     memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = pixels_proc;
+    wc.hInstance = inst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = "Apple2DbgPixels";
+    RegisterClassA(&wc);
+
+    memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = dbg_proc;
     wc.hInstance = inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
@@ -484,7 +594,7 @@ void apple2_debugger_show(HWND parent, apple2session *session)
 
     d->hwnd = CreateWindowExA(0, "Apple2DebuggerWindow", "Debugger",
                               WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                              1240, 760, NULL, NULL, inst, NULL);
+                              1240, 900, NULL, NULL, inst, NULL);
     if (!d->hwnd) {
         free(d);
         g_dbg = NULL;
@@ -516,6 +626,17 @@ void apple2_debugger_show(HWND parent, apple2session *session)
         apple2debug_pause(d->dbg);
     } else {
         SetWindowTextA(d->status, "No debugger (the session is not running)");
+    }
+
+    /* Dev affordance, like APPLE2_OPEN_DEBUGGER: land on a given video page
+     * (an index into apple2debug_view_name) instead of text page 1. */
+    {
+        const char *v = getenv("APPLE2_DEBUGGER_VIEW");
+        if (v && *v) {
+            const int idx = atoi(v);
+            if (idx >= 0 && idx < APPLE2VIEW_COUNT)
+                SendMessageA(d->view_pick, CB_SETCURSEL, (WPARAM)idx, 0);
+        }
     }
 
     SetTimer(d->hwnd, TIMER_REFRESH, 100, NULL);
