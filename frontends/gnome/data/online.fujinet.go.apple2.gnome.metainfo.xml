@@ -42,6 +42,19 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-07-27">
+      <description>
+        <p>
+          Release artifacts now embed the Apple II system ROMs, so the
+          flatpak, macOS bundle and Windows build all boot out of the box --
+          following AppleWin's own long-standing precedent. The ROM-less
+          configuration (WITH_APPLE_ROMS=OFF) remains fully supported for
+          anyone who cannot embed Apple's firmware under their own policy,
+          and a build made that way now reports clearly when no ROMs have
+          been imported yet instead of a generic startup failure.
+        </p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-07-27">
       <description>
         <p>
