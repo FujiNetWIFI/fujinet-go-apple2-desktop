@@ -204,9 +204,18 @@ M6  debugger. THE SEAM IS DONE AND TESTED; the engine and windows remain.
         machine and checks the disassembled lengths tile the address range.
     Symbols load from AppleWin's own APPLE2E.SYM / A2_BASIC.SYM / A2_DOS33.SYM2,
     which staging already copies in -- no extraction script for this target.
-    Remaining for M6: the native debugger windows (GNOME + KDE), and Apple II
-    video views (text / lo-res / hi-res page decoders) to replace adam's
-    vdpview.c.
+    The GNOME debugger window is done: run control, 6502 registers with a
+    decoded flag string, live disassembly with click-to-toggle breakpoints and
+    a PC marker, and a memory view that takes an address OR a symbol name.
+    F12 opens it, F5/F7/F8/Shift+F8 drive it, APPLE2_OPEN_DEBUGGER=1 opens it
+    at launch. It opens PAUSED on purpose -- a debugger that opens on a
+    running machine shows a listing that is stale before it is drawn.
+    NOTE: the engine's stop callback fires on the EMULATOR thread, so it is
+    marshalled with g_idle_add before any widget is touched.
+    NOTE: AppleWin stores SP as a full stack address ($01F9), not the 6502's
+    8-bit value.
+    Remaining for M6: the KDE debugger window, and Apple II video views
+    (text / lo-res / hi-res page decoders) to replace adam's vdpview.c.
 M7  CI: linux, then macOS and Windows, then flatpak.
     Top Windows risk: the AppleWin libretro frontend has never been built
     under MinGW (the cross-compile work upstream covers the SDL2 frontend).

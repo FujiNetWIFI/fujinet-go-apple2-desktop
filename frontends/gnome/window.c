@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "debugger/dbg_window.h"
 #include "display.h"
 #include "prefs.h"
 #include "webview.h"
@@ -92,6 +93,9 @@ static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
         else
             gtk_window_fullscreen(GTK_WINDOW(self));
         return TRUE;
+    case GDK_KEY_F12:
+        gtk_widget_activate_action(GTK_WIDGET(self), "win.debugger", NULL);
+        return TRUE;
     default:
         break;
     }
@@ -106,7 +110,8 @@ static void on_key_released(GtkEventControllerKey *controller, guint keyval,
     Apple2Window *self = APPLE2_WINDOW(user_data);
     (void)controller;
     (void)keycode;
-    if (keyval == GDK_KEY_F10 || keyval == GDK_KEY_F11)
+    if (keyval == GDK_KEY_F10 || keyval == GDK_KEY_F11 ||
+        keyval == GDK_KEY_F12)
         return;
     forward_key(self, keyval, state, 0);
 }
@@ -257,6 +262,15 @@ static void action_fujinet_log(GSimpleAction *action, GVariant *param,
     apple2_fujinet_log_show(GTK_WINDOW(self), self->session);
 }
 
+static void action_debugger(GSimpleAction *action, GVariant *param,
+                            gpointer user_data)
+{
+    Apple2Window *self = APPLE2_WINDOW(user_data);
+    (void)action;
+    (void)param;
+    apple2_debugger_show(GTK_WINDOW(self), self->session);
+}
+
 static void action_preferences(GSimpleAction *action, GVariant *param,
                                gpointer user_data)
 {
@@ -292,6 +306,7 @@ static GMenu *build_menu(void)
     GMenu *machine = g_menu_new();
     GMenu *media = g_menu_new();
     GMenu *fujinet = g_menu_new();
+    GMenu *view = g_menu_new();
     GMenu *tail = g_menu_new();
 
     g_menu_append(machine, "Reset", "win.reset");
@@ -306,6 +321,9 @@ static GMenu *build_menu(void)
     g_menu_append(fujinet, "FujiNet Console Log…", "win.fujinet-log");
     g_menu_append_section(menu, "FujiNet", G_MENU_MODEL(fujinet));
 
+    g_menu_append(view, "Debugger (F12)", "win.debugger");
+    g_menu_append_section(menu, "View", G_MENU_MODEL(view));
+
     g_menu_append(tail, "Preferences…", "win.preferences");
     g_menu_append(tail, "About FujiNet Go Apple II", "win.about");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(tail));
@@ -313,6 +331,7 @@ static GMenu *build_menu(void)
     g_object_unref(machine);
     g_object_unref(media);
     g_object_unref(fujinet);
+    g_object_unref(view);
     g_object_unref(tail);
     return menu;
 }
@@ -324,6 +343,7 @@ static const GActionEntry win_actions[] = {
     {.name = "import-roms", .activate = action_import_roms},
     {.name = "fujinet-config", .activate = action_fujinet_config},
     {.name = "fujinet-log", .activate = action_fujinet_log},
+    {.name = "debugger", .activate = action_debugger},
     {.name = "preferences", .activate = action_preferences},
     {.name = "about", .activate = action_about},
 };
@@ -382,5 +402,10 @@ GtkWidget *apple2_window_new(AdwApplication *app, apple2session *session)
 
     apply_display_settings(self);
     gtk_widget_grab_focus(GTK_WIDGET(self->display));
+
+    /* Developer affordance: open the debugger alongside the main window,
+     * which is what you want when the app dies before you can reach a menu. */
+    if (getenv("APPLE2_OPEN_DEBUGGER"))
+        apple2_debugger_show(GTK_WINDOW(self), session);
     return GTK_WIDGET(self);
 }

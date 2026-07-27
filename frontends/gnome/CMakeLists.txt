@@ -16,6 +16,7 @@ set(GNOME_SOURCES
   display.c
   prefs.c
   webview.c
+  debugger/dbg_window.c
 )
 
 set(GNOME_APP_ID online.fujinet.go.apple2.gnome)
