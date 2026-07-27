@@ -356,7 +356,25 @@ M10 macOS: WRITTEN, verified only by the macOS CI job -- there is no Mac here.
     The bundle is UNSIGNED; Gatekeeper blocks it on first launch. Signing and
     notarisation want an Apple Developer identity in the repo secrets --
     fujinet-go-adam-desktop's macos job has the step to copy when one exists.
-Upstream to FujiNetWIFI/AppleWin: the SmartPort-over-SLIP listener is never
-    started by the libretro frontend, it binds 0.0.0.0 rather than loopback,
-    and Listener.cpp is missing <cstring> for MinGW. The first two silently
-    affect the Android port too.
+Upstream to FujiNetWIFI/AppleWin -- FOUR fixes, not three as earlier notes
+    said (the audio one belongs on the list too):
+      1. the SmartPort-over-SLIP listener is never started by the libretro
+         frontend (LoadConfiguration() is the only caller and that frontend
+         never calls it). THIS is what stood between "boots" and "FujiNet
+         works".
+      2. the listener defaults to 0.0.0.0 rather than loopback -- an
+         unauthenticated block-device channel into the machine, on every
+         interface. Must be the DEFAULT that changes: LoadConfiguration()
+         re-initialises from it when the registry carries no address.
+      3. std::memcpy without <cstring> -- fine via libstdc++ on Linux/macOS,
+         fails on MinGW.
+      4. rdirectsound.cpp mixes the second ring-buffer segment at
+         buffer.data() instead of after the first (ptr passed by value,
+         mixBuffer does *ptr += ...), so segments sum on every wrap.
+    1 and 2 silently affect the Android port too -- it shares the frontend.
+    Four clean commits are prepared; NOT submitted (that is the maintainer's
+    call). Once they land, drop the matching transforms from
+    tools/applewin/patch-staged-tree.py -- and note that building this repo
+    against a branch carrying them would DOUBLE the listener start, because
+    the patcher would not recognise its own replacement under different
+    comment wording.

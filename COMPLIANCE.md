@@ -88,7 +88,13 @@ missing and where to put it, rather than showing a black screen.
 **This is enforced, not just documented.** The `no_embedded_roms` ctest takes a
 distinctive slice of every firmware image in the staged resource directory and
 greps the built binary for it; a ROM that gets compiled in despite the option
-fails the build. It runs only in the configuration it describes.
+fails the build. It registers only in the configuration it describes.
+
+Since the packaging path pins `WITH_APPLE_ROMS=OFF`, that test now runs in
+three CI jobs — `linux` (its dedicated ROM-less build), `macos` and `windows`
+— and in the latter two it runs against **the very binaries that get uploaded
+and attached to a release**. The claim at the top of this file is therefore
+checked by machine on the artifacts themselves, not asserted about them.
 
 ## Deliberate choices
 
