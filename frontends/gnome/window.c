@@ -182,6 +182,63 @@ static void action_import_media(GSimpleAction *action, GVariant *param,
     g_object_unref(dialog);
 }
 
+static void rom_import_done(GObject *source, GAsyncResult *result,
+                            gpointer user_data)
+{
+    Apple2Window *self = APPLE2_WINDOW(user_data);
+    g_autoptr(GListModel) files =
+        gtk_file_dialog_open_multiple_finish(GTK_FILE_DIALOG(source), result,
+                                             NULL);
+    g_autofree char *msg = NULL;
+    guint n, i, ok = 0;
+
+    if (!files)
+        return;
+    n = g_list_model_get_n_items(files);
+    for (i = 0; i < n; i++) {
+        g_autoptr(GFile) f = g_list_model_get_item(files, i);
+        g_autofree char *path = g_file_get_path(f);
+        char dest[1024];
+        if (path && apple2session_import_rom(self->session, path, dest,
+                                             sizeof(dest)) == 0)
+            ok++;
+    }
+    if (ok == 0) {
+        apple2_window_toast(self, apple2session_last_error(self->session));
+        return;
+    }
+    /* The ROMs are read when the core loads, so this needs a restart. */
+    apple2_window_restart_session(self);
+    msg = g_strdup_printf("Imported %u ROM file%s (session restarted)",
+                          ok, ok == 1 ? "" : "s");
+    apple2_window_toast(self, msg);
+}
+
+static void action_import_roms(GSimpleAction *action, GVariant *param,
+                               gpointer user_data)
+{
+    Apple2Window *self = APPLE2_WINDOW(user_data);
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    GtkFileFilter *filter = gtk_file_filter_new();
+    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    (void)action;
+    (void)param;
+
+    /* AppleWin looks ROMs up by exact filename (Apple2e_Enhanced.rom,
+     * DISK2.rom, ...), so whatever is picked keeps its name. */
+    gtk_file_filter_set_name(filter, "Apple II system ROMs");
+    gtk_file_filter_add_suffix(filter, "rom");
+    gtk_file_filter_add_suffix(filter, "ROM");
+    gtk_file_filter_add_suffix(filter, "bin");
+    g_list_store_append(filters, filter);
+    gtk_file_dialog_set_title(dialog, "Import System ROMs");
+    gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+    gtk_file_dialog_open_multiple(dialog, GTK_WINDOW(self), NULL,
+                                  rom_import_done, self);
+    g_object_unref(filters);
+    g_object_unref(dialog);
+}
+
 static void action_fujinet_config(GSimpleAction *action, GVariant *param,
                                   gpointer user_data)
 {
@@ -242,6 +299,7 @@ static GMenu *build_menu(void)
     g_menu_append_section(menu, "Machine", G_MENU_MODEL(machine));
 
     g_menu_append(media, "Import Disk Image…", "win.import-media");
+    g_menu_append(media, "Import System ROMs…", "win.import-roms");
     g_menu_append_section(menu, "Media", G_MENU_MODEL(media));
 
     g_menu_append(fujinet, "FujiNet Configuration…", "win.fujinet-config");
@@ -263,6 +321,7 @@ static const GActionEntry win_actions[] = {
     {.name = "reset", .activate = action_reset},
     {.name = "power-cycle", .activate = action_power_cycle},
     {.name = "import-media", .activate = action_import_media},
+    {.name = "import-roms", .activate = action_import_roms},
     {.name = "fujinet-config", .activate = action_fujinet_config},
     {.name = "fujinet-log", .activate = action_fujinet_log},
     {.name = "preferences", .activate = action_preferences},

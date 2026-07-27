@@ -199,7 +199,19 @@ int         apple2session_fujinet_copy_log(apple2session *s, char *dst, int max)
 int apple2session_import_media(apple2session *s, const char *src_path,
                                char *dest_out, int dest_sz);
 
+/* Import an Apple II system ROM. The file is copied into the session's ROM
+ * directory under its own name -- AppleWin looks ROMs up by exact filename
+ * (Apple2e_Enhanced.rom, DISK2.rom, ...), so the name must be preserved.
+ * Takes effect on the next start. Returns 0 on success and writes the
+ * destination into dest_out.
+ *
+ * Only builds configured with WITH_APPLE_ROMS=OFF read this directory; a
+ * build with the ROMs compiled in ignores it. See COMPLIANCE.md. */
+int apple2session_import_rom(apple2session *s, const char *src_path,
+                             char *dest_out, int dest_sz);
+
 /* Directory paths (valid for the session's lifetime). */
+const char *apple2session_roms_path(const apple2session *s);
 const char *apple2session_config_path(const apple2session *s);
 const char *apple2session_data_path(const apple2session *s);
 const char *apple2session_sd_path(const apple2session *s);

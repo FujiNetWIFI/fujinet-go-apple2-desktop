@@ -63,9 +63,19 @@ cmake -B build -G Ninja \
 ## Apple II system ROMs
 
 The Apple II ROMs are Apple copyrighted firmware and are **not** freely
-licensed. `WITH_APPLE_ROMS=ON` (the default) compiles them in, which is what
-makes the machine boot out of the box — but an artifact built that way must
-not be redistributed. Read `COMPLIANCE.md` before publishing anything.
+licensed.
+
+- **`WITH_APPLE_ROMS=ON`** (the default) compiles them in, which is what makes
+  the machine boot out of the box — but an artifact built that way **must not
+  be redistributed.**
+- **`WITH_APPLE_ROMS=OFF`** builds without them. Supply your own with
+  **Import System ROMs…**, which copies them into
+  `~/.local/share/fujinet-go-apple2/roms` (override with `APPLE2_ROM_DIR`).
+  AppleWin looks ROMs up by exact filename, so keep the names
+  (`Apple2e_Enhanced.rom`, `DISK2.rom`, …). FujiNet still works with no ROMs
+  at all — its SmartPort card firmware is not Apple's and stays embedded.
+
+Read `COMPLIANCE.md` before publishing anything.
 
 ## Keyboard
 
@@ -79,6 +89,7 @@ work too.
 | Variable | Effect |
 |---|---|
 | `APPLE2_PACE_LOG=1` | once-per-second frame pacing: fps, frames behind, frames on vsync |
+| `APPLE2_ROM_DIR` | where a `WITH_APPLE_ROMS=OFF` build reads system ROMs |
 | `FUJINET_LIB` | explicit path to `libfujinet.so`/`.dylib`/`.dll` |
 | `FUJINET_WEBUI_BIND` | override the web admin bind address (default `127.0.0.1`) |
 

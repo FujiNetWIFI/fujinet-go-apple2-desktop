@@ -206,8 +206,11 @@ int paths_init(apple2session *s, const apple2session_paths *p)
 
     snprintf(s->settings_file, sizeof(s->settings_file), "%s/settings.ini",
              s->config_dir);
-    snprintf(s->cart_dir, sizeof(s->cart_dir), "%s/carts", s->data_dir);
-    mkdir_p(s->cart_dir);
+    /* Where the user drops Apple II system ROMs for a WITH_APPLE_ROMS=OFF
+     * build. Always created: it is also what the "Import System ROMs..."
+     * action writes into. */
+    snprintf(s->roms_dir, sizeof(s->roms_dir), "%s/roms", s->data_dir);
+    mkdir_p(s->roms_dir);
 
     if (p && p->fujinet_lib) /* may be "" = explicitly disabled */
         snprintf(s->fujinet_lib, sizeof(s->fujinet_lib), "%s", p->fujinet_lib);

@@ -34,11 +34,36 @@ This is controlled by the `WITH_APPLE_ROMS` CMake option:
 - **`OFF`** — build without the ROMs; the user supplies their own. This is
   what the release job builds, and what any public download must be.
 
-`WITH_APPLE_ROMS=OFF` is **not implemented yet** — configuring with it fails
-with an explanatory error rather than silently embedding the ROMs anyway. It
-needs a placeholder `apple2roms` target (AppleWin's `common2` links that
-target unconditionally) plus the user ROM-import path; the two land together.
-Until then, **no artifact from this repository is redistributable.**
+### How `WITH_APPLE_ROMS=OFF` works
+
+AppleWin's `common2` links the `apple2roms` target unconditionally, so it has
+to exist either way — what changes is whether it carries Apple's bytes. With
+the option off, `tools/applewin/generate-rom-loader.py` generates a
+replacement that defines the same `apple2roms::data` map but fills it by
+reading ROM files from the user's ROM directory
+(`$XDG_DATA_HOME/fujinet-go-apple2/roms`, overridable with `APPLE2_ROM_DIR`)
+on first use. The id → filename table is parsed out of AppleWin's own
+`resource/CMakeLists.txt` so it cannot drift from the staged tree.
+
+The split is by kind: every firmware image (`.rom`, `.ROM`, `.bin`) is
+externalised, and AppleWin's own artwork and fonts stay compiled in. That is
+deliberately conservative — it covers Apple's monitor/Applesoft/Disk ][/SSC
+firmware and also the third-party card ROMs (Mockingboard, Mouse,
+ThunderClock, …) whose redistribution terms have not been established either.
+
+The one firmware image kept embedded is **`spoverslip.bin`**, the
+SmartPort-over-SLIP card from the FujiNetWIFI AppleWin fork — it is not
+Apple's, and without it there is no FujiNet at all.
+
+Users supply the ROMs through **Import System ROMs…**, which copies them into
+the ROM directory under their own names (AppleWin looks them up by exact
+filename) and restarts the session. Without any ROMs the app reports what is
+missing and where to put it, rather than showing a black screen.
+
+**This is enforced, not just documented.** The `no_embedded_roms` ctest takes a
+distinctive slice of every firmware image in the staged resource directory and
+greps the built binary for it; a ROM that gets compiled in despite the option
+fails the build. It runs only in the configuration it describes.
 
 `spoverslip.bin`, the SmartPort-over-SLIP card firmware, is part of the
 FujiNetWIFI AppleWin fork and is *not* affected by the above.

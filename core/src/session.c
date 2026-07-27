@@ -264,6 +264,11 @@ static void *emu_thread_main(void *arg)
     apple2host_set_variable(OPT_PREFIX "slot7", s->opt_slot7);
     apple2host_set_variable(OPT_PREFIX "video_mode", s->opt_video_mode);
 
+    /* Tell the external ROM loader where to look. Only a
+     * WITH_APPLE_ROMS=OFF build reads this; setting it always keeps the two
+     * configurations behaving the same from the session's point of view. */
+    setenv("APPLE2_ROM_DIR", s->roms_dir, 1);
+
     apple2host_set_log_sink(core_log_sink, s);
     apple2host_set_frame_sink(on_core_frame, s);
 
@@ -631,6 +636,7 @@ int apple2session_render_audio(apple2session *s, int16_t *out, int nsamples)
     return nsamples;
 }
 
+const char *apple2session_roms_path(const apple2session *s) { return s->roms_dir; }
 const char *apple2session_config_path(const apple2session *s) { return s->config_dir; }
 const char *apple2session_data_path(const apple2session *s) { return s->data_dir; }
 const char *apple2session_sd_path(const apple2session *s) { return s->fujinet_sd; }
@@ -675,6 +681,29 @@ static int ext_is(const char *ext, const char *want)
     for (; *ext && *want; ext++, want++)
         if ((*ext | 0x20) != *want) return 0;
     return *ext == '\0' && *want == '\0';
+}
+
+int apple2session_import_rom(apple2session *s, const char *src_path,
+                            char *dest_out, int dest_sz)
+{
+    const char *base = strrchr(src_path, '/');
+    char dst[APPLE2_PATH_MAX];
+
+    base = base ? base + 1 : src_path;
+    if (!*base) {
+        session_set_error(s, "Not a file: %s", src_path);
+        return -1;
+    }
+
+    mkdir_p(s->roms_dir);
+    snprintf(dst, sizeof(dst), "%s/%s", s->roms_dir, base);
+    if (copy_file(src_path, dst) != 0) {
+        session_set_error(s, "Could not copy %s to %s", src_path, dst);
+        return -1;
+    }
+    if (dest_out && dest_sz > 0)
+        snprintf(dest_out, (size_t)dest_sz, "%s", dst);
+    return 0;
 }
 
 int apple2session_import_media(apple2session *s, const char *src_path,

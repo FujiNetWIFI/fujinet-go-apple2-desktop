@@ -34,7 +34,7 @@ struct apple2session {
     /* ---- resolved paths ---- */
     char config_dir[APPLE2_PATH_MAX];
     char data_dir[APPLE2_PATH_MAX];
-    char cart_dir[APPLE2_PATH_MAX];
+    char roms_dir[APPLE2_PATH_MAX];  /* user-supplied system ROMs */
     char settings_file[APPLE2_PATH_MAX];
     char fujinet_lib[APPLE2_PATH_MAX];  /* "" = unavailable/disabled */
     char fujinet_src[APPLE2_PATH_MAX];  /* provisioning source override */

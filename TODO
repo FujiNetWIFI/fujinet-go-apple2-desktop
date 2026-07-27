@@ -135,10 +135,26 @@ M3 -- FujiNet in-process. DONE: CONFIG BOOTS.
     hard-inserts a Disk ][ in CardManager's constructor) so the Disk ][ can be
     removed. Default "Disk II".
 
+M4 -- partly done:
+  * fnconfig.ini now comes from the firmware's own BUILD_APPLE default, so
+    CONFIG lists SD / tnfs.fujinet.online / apps.irata.online instead of the
+    Atari host list.
+  * WITH_APPLE_ROMS=OFF is implemented. tools/applewin/generate-rom-loader.py
+    generates a replacement apple2roms target that reads firmware images from
+    the user's ROM directory at first use; the id->filename table is parsed
+    out of AppleWin's resource/CMakeLists.txt so it cannot drift. The split is
+    by kind (.rom/.ROM/.bin go out, artwork and fonts stay), with
+    spoverslip.bin kept embedded so FujiNet works with no ROMs at all.
+    "Import System ROMs..." copies files in and restarts. A no_embedded_roms
+    ctest greps the binary for a slice of every firmware image, so the
+    COMPLIANCE.md claim is enforced rather than asserted.
+    Verified: ROM-less + imported ROMs boots CONFIG identically to the
+    embedded build.
+  * slot6 is now configurable (see above).
+
 Next
 ----
-M4  settings, media import, ROM import (needed for WITH_APPLE_ROMS=OFF --
-    see COMPLIANCE.md; currently OFF is a hard error), gamepad, audio.
+M4  remaining: gamepad/paddle testing against real hardware, audio check.
 M5  KDE frontend (early, to keep the core toolkit-agnostic).
 M6  debugger engine + first native window. Investigate the single-step seam
     EARLY: AppleWin executes per-cycle inside executeOneFrame() and there is

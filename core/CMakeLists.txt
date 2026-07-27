@@ -65,25 +65,75 @@ else()
 endif()
 message(STATUS "AppleWin: using Boost headers from ${Boost_INCLUDE_DIRS}")
 
-# ---- embedded Apple II system ROMs -----------------------------------------
-# AppleWin's `apple2roms` target compiles the ROM images into the binary
-# (xxd -i). common2 links it unconditionally, so the target must exist either
-# way; see COMPLIANCE.md for why this is behind an option at all.
-if(NOT WITH_APPLE_ROMS)
-  message(FATAL_ERROR
-    "WITH_APPLE_ROMS=OFF is not implemented yet.\n"
-    "It needs a placeholder `apple2roms` target (common2 links it "
-    "unconditionally) plus the user ROM-import path, which land together. "
-    "Until then this build always embeds the ROMs -- see COMPLIANCE.md for "
-    "what that means for redistribution.")
-endif()
-
 # ---- AppleWin component libraries, in dependency order ---------------------
 add_subdirectory("${AW}/libyaml"                     applewin-libyaml)
 add_subdirectory("${AW}/minizip"                     applewin-minizip)
 add_subdirectory("${AW}/source/linux/libwindows"     applewin-libwindows)
 add_subdirectory("${AW}/source"                      applewin-source)
-add_subdirectory("${AW}/resource"                    applewin-resource)
+
+# ---- the Apple II system ROMs ----------------------------------------------
+# AppleWin's resource/ target compiles the ROM images into the binary with
+# xxd -i. common2 links `apple2roms` unconditionally, so the target has to
+# exist either way -- what changes is whether it carries Apple's bytes.
+# See COMPLIANCE.md.
+if(WITH_APPLE_ROMS)
+  add_subdirectory("${AW}/resource"                  applewin-resource)
+else()
+  # Same map, filled from ROM files in the user's ROM directory at first use.
+  # spoverslip.bin (the FujiNet SmartPort card firmware, not Apple's) and the
+  # debugger font stay embedded, so FujiNet still works without any ROMs.
+  set(ROM_LOADER_CPP "${CMAKE_CURRENT_BINARY_DIR}/apple2roms_loader.cpp")
+  set(ROM_LOADER_H   "${CMAKE_CURRENT_BINARY_DIR}/apple2roms_data.h")
+  set(ROM_EMBED_LIST "${CMAKE_CURRENT_BINARY_DIR}/apple2roms_embedded.txt")
+  add_custom_command(
+    OUTPUT "${ROM_LOADER_CPP}" "${ROM_LOADER_H}" "${ROM_EMBED_LIST}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/applewin/generate-rom-loader.py"
+            "${AW}/resource/CMakeLists.txt"
+            "${ROM_LOADER_CPP}" "${ROM_LOADER_H}" "${ROM_EMBED_LIST}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/tools/applewin/generate-rom-loader.py"
+            "${AW}/resource/CMakeLists.txt"
+    COMMENT "Generating the external ROM loader (WITH_APPLE_ROMS=OFF)"
+    VERBATIM)
+
+  # xxd the two we do embed, exactly as add_resources() would, so the symbol
+  # names the generated loader declares line up.
+  find_program(XXD_EXECUTABLE xxd)
+  if(NOT XXD_EXECUTABLE)
+    message(FATAL_ERROR "xxd is required to build with WITH_APPLE_ROMS=OFF")
+  endif()
+  # Run the generator at configure time too, so the embed list is known now.
+  execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/applewin/generate-rom-loader.py"
+            "${AW}/resource/CMakeLists.txt"
+            "${ROM_LOADER_CPP}" "${ROM_LOADER_H}" "${ROM_EMBED_LIST}"
+    RESULT_VARIABLE _rc)
+  if(NOT _rc EQUAL 0)
+    message(FATAL_ERROR "generate-rom-loader.py failed")
+  endif()
+  file(STRINGS "${ROM_EMBED_LIST}" ROM_EMBED_FILES)
+
+  set(ROM_EMBED_SRC "")
+  foreach(_res IN LISTS ROM_EMBED_FILES)
+    set(_out "${CMAKE_CURRENT_BINARY_DIR}/${_res}.cpp")
+    add_custom_command(
+      OUTPUT "${_out}"
+      COMMAND "${XXD_EXECUTABLE}" -i "${_res}" > "${_out}"
+      WORKING_DIRECTORY "${AW}/resource"
+      DEPENDS "${AW}/resource/${_res}"
+      COMMENT "Embedding resource: ${_res}"
+      VERBATIM)
+    list(APPEND ROM_EMBED_SRC "${_out}")
+  endforeach()
+
+  add_library(apple2roms STATIC "${ROM_LOADER_CPP}" "${ROM_LOADER_H}" ${ROM_EMBED_SRC})
+  target_include_directories(apple2roms PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
+  message(STATUS
+    "WITH_APPLE_ROMS=OFF: the Apple II ROMs are NOT embedded; the app reads "
+    "them from the user's ROM directory at run time")
+endif()
+
 add_subdirectory("${AW}/source/frontends/common2"    applewin-common2)
 add_subdirectory("${AW}/source/frontends/libretro"   applewin-libretro)
 
@@ -140,3 +190,14 @@ target_link_libraries(boot_smoke apple2session)
 add_test(NAME input COMMAND input_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 set_tests_properties(boot_smoke PROPERTIES SKIP_RETURN_CODE 77)
+
+# Makes the COMPLIANCE.md claim checkable: a ROM-less build must not have any
+# Apple (or third-party card) firmware compiled into it. Only meaningful for
+# the configuration it describes.
+if(NOT WITH_APPLE_ROMS)
+  add_test(NAME no_embedded_roms
+           COMMAND "${Python3_EXECUTABLE}"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tests/no_embedded_roms.py"
+                   "$<TARGET_FILE:boot_smoke>"
+                   "${AW}/resource")
+endif()
