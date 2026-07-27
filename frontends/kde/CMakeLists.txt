@@ -20,6 +20,7 @@ add_executable(fujinet-go-apple2-kde
   DisplayWidget.cpp
   SettingsDialog.cpp
   FujiNetWindows.cpp
+  debugger/DebuggerWindow.cpp
 )
 
 target_link_libraries(fujinet-go-apple2-kde PRIVATE

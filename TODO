@@ -214,8 +214,15 @@ M6  debugger. THE SEAM IS DONE AND TESTED; the engine and windows remain.
     marshalled with g_idle_add before any widget is touched.
     NOTE: AppleWin stores SP as a full stack address ($01F9), not the 6502's
     8-bit value.
-    Remaining for M6: the KDE debugger window, and Apple II video views
-    (text / lo-res / hi-res page decoders) to replace adam's vdpview.c.
+    The KDE debugger window is done too, same shape over the same engine,
+    with the stop callback handed to the GUI thread by a queued connection
+    (QMetaObject::invokeMethod) instead of g_idle_add.
+    NOTE for any future Qt pane: under a tiling window manager the window is
+    whatever width the tile is, resize() is ignored, and a QScrollArea still
+    propagates its child's minimum -- so the disassembly needs an explicit
+    setMinimumWidth or the register/memory panes crowd it out entirely.
+    Remaining for M6: Apple II video views (text / lo-res / hi-res page
+    decoders) to replace adam's vdpview.c.
 M7  CI: linux, then macOS and Windows, then flatpak.
     Top Windows risk: the AppleWin libretro frontend has never been built
     under MinGW (the cross-compile work upstream covers the SDL2 frontend).

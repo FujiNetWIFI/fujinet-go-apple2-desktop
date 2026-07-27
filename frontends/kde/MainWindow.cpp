@@ -16,6 +16,7 @@
 #include <QStatusBar>
 
 #include "DisplayWidget.h"
+#include "debugger/DebuggerWindow.h"
 #include "FujiNetWindows.h"
 #include "SettingsDialog.h"
 
@@ -36,6 +37,11 @@ MainWindow::MainWindow(apple2session *session, QWidget *parent)
     buildMenus();
     applyDisplaySettings();
     m_display->setFocus();
+
+    /* Developer affordance: open the debugger alongside the main window,
+     * which is what you want when the app dies before you reach a menu. */
+    if (qEnvironmentVariableIsSet("APPLE2_OPEN_DEBUGGER"))
+        DebuggerWindow::show(this, m_session);
 }
 
 void MainWindow::status(const QString &message)
@@ -134,6 +140,10 @@ void MainWindow::buildMenus()
                        [this] { fujinet_config_show(this, m_session); });
     fujinet->addAction(QStringLiteral("Console &Log…"), this,
                        [this] { fujinet_log_show(this, m_session); });
+
+    QMenu *view = menuBar()->addMenu(QStringLiteral("&View"));
+    view->addAction(QStringLiteral("&Debugger"), QKeySequence(Qt::Key_F12),
+                    this, [this] { DebuggerWindow::show(this, m_session); });
 
     QMenu *settings = menuBar()->addMenu(QStringLiteral("&Settings"));
     settings->addAction(QStringLiteral("&Settings…"), this, [this] {

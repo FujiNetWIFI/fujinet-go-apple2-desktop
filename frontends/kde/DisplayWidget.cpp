@@ -147,12 +147,14 @@ void DisplayWidget::paintGL()
 
 bool DisplayWidget::event(QEvent *event)
 {
-    /* Claim every key except the two reserved chords while focused, so menu
-     * accelerators cannot shadow what the Apple II should receive. Alt in
-     * particular must NOT reach the menu bar: it is Open/Closed Apple. */
+    /* Claim every key except the reserved chords (F10 menu, F11 fullscreen,
+     * F12 debugger) while focused, so menu accelerators cannot shadow what
+     * the Apple II should receive. Alt in particular must NOT reach the menu
+     * bar: it is Open/Closed Apple. */
     if (event->type() == QEvent::ShortcutOverride) {
         QKeyEvent *ke = static_cast<QKeyEvent *>(event);
-        if (ke->key() != Qt::Key_F10 && ke->key() != Qt::Key_F11) {
+        if (ke->key() != Qt::Key_F10 && ke->key() != Qt::Key_F11 &&
+            ke->key() != Qt::Key_F12) {
             event->accept();
             return true;
         }
