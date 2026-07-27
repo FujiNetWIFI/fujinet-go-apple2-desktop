@@ -36,9 +36,11 @@ flatpak build all end up with a usable checkout. CI deliberately does nothing
 to prepare the tree, so this promise is tested on every push.
 
 Build dependencies: CMake ≥ 3.20, Ninja, a C99/C++17 compiler, Python 3,
-SDL3, zlib, Boost headers (header-only — no compiled Boost is linked), and
-libadwaita ≥ 1.4 / GTK ≥ 4.10 for the GNOME frontend. WebKitGTK 6.0 is
-optional; without it the FujiNet web UI opens in the system browser.
+`xxd` (AppleWin embeds its resources with it — it ships with vim), SDL3,
+zlib, and Boost headers (header-only — no compiled Boost is linked). The
+GNOME frontend additionally needs libadwaita ≥ 1.4 / GTK ≥ 4.10, and the KDE
+one Qt6 ≥ 6.4 Widgets. WebKitGTK 6.0 and QtWebEngine are optional; without
+them the FujiNet web UI opens in the system browser.
 
 ### Useful options
 

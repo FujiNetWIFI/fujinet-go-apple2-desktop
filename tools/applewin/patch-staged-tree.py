@@ -35,7 +35,12 @@ def patch(root, rel, transforms):
     p = root / rel
     if not p.is_file():
         fail(f"expected file missing: {rel}")
-    text = p.read_text(encoding="utf-8", errors="surrogateescape", newline="")
+    # Explicit open() rather than Path.read_text(newline=...): the newline
+    # argument only reached read_text in Python 3.13, and this has to run on
+    # whatever interpreter the platform ships (Ubuntu 24.04 is on 3.12).
+    with open(p, "r", encoding="utf-8", errors="surrogateescape",
+              newline="") as fh:
+        text = fh.read()
     for old, new in transforms:
         # Test the REPLACEMENT first, not the anchor.
         #
@@ -50,7 +55,9 @@ def patch(root, rel, transforms):
         if old not in text:
             fail(f"patch anchor not found in {rel}:\n---\n{old}\n---")
         text = text.replace(old, new, 1)
-    p.write_text(text, encoding="utf-8", errors="surrogateescape", newline="")
+    with open(p, "w", encoding="utf-8", errors="surrogateescape",
+              newline="") as fh:
+        fh.write(text)
 
 
 def apply_all(root):

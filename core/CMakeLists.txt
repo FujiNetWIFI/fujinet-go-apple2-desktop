@@ -65,6 +65,19 @@ else()
 endif()
 message(STATUS "AppleWin: using Boost headers from ${Boost_INCLUDE_DIRS}")
 
+# Put Boost on the include path for EVERY AppleWin subdirectory, not just the
+# two that ask for it: frontends/libretro/retroregistry.cpp includes
+# common2/ptreeregistry.h, which includes boost/property_tree, but the
+# libretro target never adds Boost_INCLUDE_DIRS. That goes unnoticed wherever
+# Boost lives in a default include path (Linux /usr/include, MSYS2
+# /ucrt64/include) and fails on macOS, where Homebrew puts it under
+# /opt/homebrew.
+#
+# SYSTEM matters: CMake drops a directory it considers an implicit system
+# include, so this is a no-op on the platforms where it would have been
+# redundant, and only takes effect where it is actually needed.
+include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
+
 # ---- AppleWin component libraries, in dependency order ---------------------
 add_subdirectory("${AW}/libyaml"                     applewin-libyaml)
 add_subdirectory("${AW}/minizip"                     applewin-minizip)
