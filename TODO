@@ -152,10 +152,24 @@ M4 -- partly done:
     embedded build.
   * slot6 is now configurable (see above).
 
+M5 -- KDE frontend done. Plain Qt6 Widgets, no KDE Frameworks. QOpenGLWidget
+  with swapInterval 1, whose frameSwapped signal both feeds the session's
+  vsync phase-lock and schedules the next repaint. Boots CONFIG; ctest covers
+  its desktop entry and metainfo.
+  The point of doing this early was to prove the core is toolkit-agnostic,
+  and it did: the KDE frontend needed NO change to core/ at all.
+  Two Qt-specific things worth remembering:
+  * quint64 and uint64_t are distinct types here (unsigned long long vs
+    unsigned long), so the frame serial must be declared uint64_t.
+  * QImage's stride is not the session's. The frame is kept in a plain
+    std::vector<uint32_t> and QImage is only ever a VIEW over it with an
+    explicit bytesPerLine, because the session packs rows at the frame width.
+  * ShortcutOverride is accepted for everything except F10/F11 -- Alt must not
+    reach the menu bar, it is Open/Closed Apple.
+
 Next
 ----
 M4  remaining: gamepad/paddle testing against real hardware, audio check.
-M5  KDE frontend (early, to keep the core toolkit-agnostic).
 M6  debugger engine + first native window. Investigate the single-step seam
     EARLY: AppleWin executes per-cycle inside executeOneFrame() and there is
     no ready single-instruction entry point at the libretro boundary. Stage
