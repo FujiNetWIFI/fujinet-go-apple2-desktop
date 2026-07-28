@@ -1,7 +1,7 @@
 /*
  * FujiNet configuration window (embedded WebKitGTK view of the FujiNet web
- * admin at 127.0.0.1:8000, matching the Android app) and a console log
- * window streaming the runtime's captured output.
+ * admin at 127.0.0.1:64001) and a console log window streaming the
+ * runtime's captured output.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later

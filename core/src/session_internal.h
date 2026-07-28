@@ -65,6 +65,7 @@ struct apple2session {
     char opt_slot6[APPLE2_OPT_MAX];
     char opt_slot7[APPLE2_OPT_MAX];
     char opt_video_mode[APPLE2_OPT_MAX];
+    char opt_video_style[APPLE2_OPT_MAX];
 
     /* Reset requested from a UI thread, applied on the emulator thread
      * between frames: 0 none, 1 warm, 2 cold. AppleWin's reset entry points

@@ -64,6 +64,21 @@ cmake -B build -G Ninja \
       -DAPPLEWIN_RESTAGE=ON
 ```
 
+`third_party/fujinet-firmware` is pinned to a fixed commit (`FUJINET_COMMIT` in
+`cmake/Dependencies.cmake`), not tracked live. To pull in newer upstream
+firmware:
+
+```sh
+tools/fujinet/update-fujinet-firmware.sh        # defaults to origin's master
+tools/fujinet/update-fujinet-firmware.sh v1.7.0 # or any branch/tag/commit
+```
+
+This only moves the submodule and the pin (staged, not committed) and prints
+the commits it pulled in. `build-fujinet-desktop.sh`'s patches are anchored to
+exact upstream text, so rebuild (`cmake --build build --target
+fujinet-runtime`) and run ctest before committing the bump — a broken anchor
+fails loudly there.
+
 ## Apple II system ROMs
 
 The Apple II ROMs are Apple copyrighted firmware and are **not** freely
@@ -112,6 +127,28 @@ program is drawing into before it flips to it.
 | `APPLE2_DEBUGGER_VIEW=N` | open the debugger on video page N (0 = text page 1, 4 = hi-res page 1) |
 | `FUJINET_LIB` | explicit path to `libfujinet.so`/`.dylib`/`.dll` |
 | `FUJINET_WEBUI_BIND` | override the web admin bind address (default `127.0.0.1`) |
+
+## Debugging FujiNet firmware
+
+`libfujinet.so` is `dlopen`'d into the emulator process, not run as a
+subprocess, so gdb can attach to it exactly like any other shared library once
+it's loaded — the only reason this normally isn't useful is that the runtime
+is always built Release, with no debug info. Build a Debug copy instead:
+
+```sh
+FN_DEBUG=1 tools/fujinet/build-fujinet-desktop.sh
+FUJINET_LIB=tools/fujinet/work/out/libfujinet.so gdb --args \
+    ./build/frontends/gnome/fujinet-go-apple2-gnome
+```
+
+`FUJINET_LIB` (see Diagnostics above) points the session at that build instead
+of whatever CMake normally provides, so the two can coexist — no need to
+rebuild the main app. Because the library loads part-way through startup, set
+breakpoints after it's mapped (`catch load libfujinet.so` before `run`, or
+just interrupt with Ctrl-C once FujiNet's console output appears and set them
+then). `FN_DEBUG=1` forces a rebuild if the tree was last built Release (and
+vice versa), so switching back just needs a plain
+`tools/fujinet/build-fujinet-desktop.sh`.
 
 ## Packaging and releases
 

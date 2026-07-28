@@ -64,6 +64,7 @@ static pthread_t g_present_thread;
 static volatile int g_present_run;
 static int g_aspect_mode;
 static int g_smooth;
+static int g_scanlines;
 static int g_fullscreen;
 /* .length is filled in at startup rather than in the initializer: only the
  * first field would be named, and -Wextra rightly complains about the rest. */
@@ -289,6 +290,7 @@ static void apply_display_settings(void)
     g_aspect_mode = apple2session_get_int(g_session, "aspect_mode",
                                           ASPECT_TV43);
     g_smooth = apple2session_get_int(g_session, "smooth_scaling", 0);
+    g_scanlines = apple2session_get_int(g_session, "scanlines", 1);
 }
 
 static void restart_session(void)
@@ -372,8 +374,8 @@ static void sync_menu_checks(void)
     }
     CheckMenuRadioItem(g_menu, IDM_ASPECT_BASE, IDM_ASPECT_BASE + 2,
                        IDM_ASPECT_BASE + (UINT)g_aspect_mode, MF_BYCOMMAND);
-    CheckMenuItem(g_menu, IDM_SMOOTH,
-                  MF_BYCOMMAND | (g_smooth ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(g_menu, IDM_SCANLINES,
+                  MF_BYCOMMAND | (g_scanlines ? MF_CHECKED : MF_UNCHECKED));
 }
 
 static HMENU build_option_menu(const option_menu *m)
@@ -423,7 +425,7 @@ static HMENU build_menu(void)
     AppendMenuA(aspect, MF_STRING, IDM_ASPECT_BASE + 1, "&Square pixels");
     AppendMenuA(aspect, MF_STRING, IDM_ASPECT_BASE + 2, "&Integer scale");
     AppendMenuA(view, MF_POPUP, (UINT_PTR)aspect, "&Aspect Ratio");
-    AppendMenuA(view, MF_STRING, IDM_SMOOTH, "S&mooth Scaling");
+    AppendMenuA(view, MF_STRING, IDM_SCANLINES, "Scan&lines");
     AppendMenuA(view, MF_SEPARATOR, 0, NULL);
     AppendMenuA(view, MF_STRING, IDM_FULLSCREEN, "&Fullscreen\tF11");
     AppendMenuA(view, MF_STRING, IDM_DEBUGGER, "&Debugger\tF12");
@@ -654,9 +656,14 @@ static void on_command(HWND hwnd, UINT cmd)
     case IDM_FUJINET_LOG:
         show_fujinet_log((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE));
         break;
-    case IDM_SMOOTH:
-        g_smooth = !g_smooth;
+    case IDM_SCANLINES:
+        g_scanlines = !g_scanlines;
+        g_smooth = g_scanlines;
+        apple2session_set_int(g_session, "scanlines", g_scanlines);
+        /* Smoothing is no longer its own option; it just follows scanlines,
+         * which is a libretro core option and needs a restart. */
         apple2session_set_int(g_session, "smooth_scaling", g_smooth);
+        restart_session();
         sync_menu_checks();
         InvalidateRect(hwnd, NULL, FALSE);
         break;

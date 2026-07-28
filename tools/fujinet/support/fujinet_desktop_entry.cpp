@@ -26,6 +26,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstdint>
@@ -78,6 +79,10 @@ int fn_make_pipe(int fds[2]) {
 
 std::mutex g_mutex;
 std::condition_variable g_setup_condition;
+/* Signalled when the runtime thread clears g_running on its way out, so
+ * fujinet_desktop_stop_runtime() can wait for that with a timeout instead of
+ * joining unconditionally -- see the comment there. */
+std::condition_variable g_stop_condition;
 std::thread g_runtime_thread;
 std::string g_last_error;
 bool g_running = false;
@@ -556,7 +561,7 @@ FUJINET_ENTRY bool fujinet_desktop_start_runtime(
     const std::string sd(sdPath);
     const char* webui_env = getenv("FUJINET_WEBUI_BIND");
     const std::string webui_bind(webui_env && *webui_env ? webui_env
-                                                         : "127.0.0.1:8000");
+                                                         : "127.0.0.1:64001");
     g_setup_complete = false;
     g_setup_failed = false;
 
@@ -618,6 +623,7 @@ FUJINET_ENTRY bool fujinet_desktop_start_runtime(
 
             std::lock_guard<std::mutex> lock(g_mutex);
             g_running = false;
+            g_stop_condition.notify_all();
         });
     } catch (const std::exception& error) {
         set_last_error_locked(
@@ -647,12 +653,37 @@ FUJINET_ENTRY bool fujinet_desktop_start_runtime(
 FUJINET_ENTRY void fujinet_desktop_stop_runtime() {
     std::thread runtimeThread;
     {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        std::unique_lock<std::mutex> lock(g_mutex);
         if (!g_running && !g_runtime_thread.joinable()) {
             return;
         }
         fnSystem.request_for_shutdown();
         runtimeThread = std::move(g_runtime_thread);
+
+        /* fn_service_loop's own loop and the SmartPort-over-SLIP device check
+         * the shutdown flag on a short poll, but iwmNetwork::shutdown() and
+         * iwmCPM::shutdown() are no-ops (upstream TODOs) -- a device with a
+         * blocking socket call in flight when shutdown is requested can miss
+         * the flag for as long as that call takes to unblock, which for a
+         * stalled remote host can be minutes. Wait for the thread with a
+         * timeout instead of joining unconditionally, so a wedged FujiNet
+         * runtime cannot hang the whole host process on exit: better a
+         * detached thread than a window the user has to kill -9. */
+        if (runtimeThread.joinable()) {
+            const bool stopped = g_stop_condition.wait_for(
+                lock, std::chrono::seconds(5), [] { return !g_running; });
+            if (!stopped) {
+                fprintf(stderr,
+                        "fujinet_desktop_stop_runtime: runtime thread did not "
+                        "stop within 5s (a device is likely blocked on I/O); "
+                        "detaching it instead of hanging the process\n");
+                runtimeThread.detach();
+                /* Leave g_running set: the detached thread is still alive and
+                 * touching FujiNet's global state, so a subsequent start must
+                 * not spawn a second thread on top of it. */
+                return;
+            }
+        }
     }
 
     if (runtimeThread.joinable()) {

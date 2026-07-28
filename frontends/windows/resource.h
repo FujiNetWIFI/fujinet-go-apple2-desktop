@@ -12,7 +12,7 @@
 #define IDM_FUJINET_LOG     206
 #define IDM_FULLSCREEN      207
 #define IDM_DEBUGGER        208
-#define IDM_SMOOTH          209
+#define IDM_SCANLINES       209
 #define IDM_ABOUT           210
 #define IDM_EXIT            211
 

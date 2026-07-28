@@ -76,15 +76,22 @@ static void combo_str_changed(GObject *row, GParamSpec *pspec,
     mark_changed(b);
 }
 
-static void switch_changed(GObject *row, GParamSpec *pspec, gpointer user_data)
+/* Scanlines is a libretro core option (like machine/slot/video_mode), so it
+ * needs a restart -- but smoothing is no longer its own control, it just
+ * follows scanlines, and that half applies live like the rest of Display. */
+static void scanlines_changed(GObject *row, GParamSpec *pspec,
+                              gpointer user_data)
 {
     RowBinding *b = user_data;
     int on = adw_switch_row_get_active(ADW_SWITCH_ROW(row)) ? 1 : 0;
     (void)pspec;
-    if (apple2session_get_int(b->state->session, b->key, b->def) == on)
+    if (apple2session_get_int(b->state->session, "scanlines", 1) == on)
         return;
-    apple2session_set_int(b->state->session, b->key, on);
-    mark_changed(b);
+    apple2session_set_int(b->state->session, "scanlines", on);
+    apple2session_set_int(b->state->session, "smooth_scaling", on);
+    b->state->machine_dirty = TRUE;
+    if (b->state->display_changed)
+        b->state->display_changed(b->state->window);
 }
 
 static RowBinding *binding_new(PrefsState *state, const char *key, int def,
@@ -149,17 +156,18 @@ static GtkWidget *combo_row_str(PrefsState *state, const char *title,
     return row;
 }
 
-static GtkWidget *switch_row(PrefsState *state, const char *title,
-                             const char *key, int def, gboolean is_display)
+static GtkWidget *scanlines_row(PrefsState *state)
 {
     GtkWidget *row = adw_switch_row_new();
-    RowBinding *b = binding_new(state, key, def, is_display, NULL);
+    RowBinding *b = binding_new(state, "scanlines", 1, FALSE, NULL);
 
-    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
-    adw_switch_row_set_active(ADW_SWITCH_ROW(row),
-                              apple2session_get_int(state->session, key, def));
-    g_signal_connect_data(row, "notify::active", G_CALLBACK(switch_changed),
-                          b, (GClosureNotify)g_free, 0);
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), "Scanlines");
+    adw_switch_row_set_active(
+        ADW_SWITCH_ROW(row),
+        apple2session_get_int(state->session, "scanlines", 1));
+    g_signal_connect_data(row, "notify::active",
+                          G_CALLBACK(scanlines_changed), b,
+                          (GClosureNotify)g_free, 0);
     return row;
 }
 
@@ -251,9 +259,7 @@ void apple2_prefs_show(Apple2Window *parent, apple2session *session,
     adw_preferences_group_add(
         display, combo_row(state, "Aspect ratio", "aspect_mode", 0,
                            aspect_names, TRUE));
-    adw_preferences_group_add(
-        display,
-        switch_row(state, "Smooth scaling", "smooth_scaling", 0, TRUE));
+    adw_preferences_group_add(display, scanlines_row(state));
 
     adw_preferences_page_add(page, machine);
     adw_preferences_page_add(page, slots);

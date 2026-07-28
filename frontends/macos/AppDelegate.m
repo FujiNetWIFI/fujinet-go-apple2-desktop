@@ -343,6 +343,31 @@ static const option_row kOptionRows[] = {
     return box;
 }
 
+/* Scanlines is a libretro core option (like Model/Video/slots above), so it
+ * needs a restart -- unlike the rest of Display, which applies live. */
+- (NSButton *)checkBoxForScanlines
+{
+    NSButton *box =
+        [NSButton checkboxWithTitle:@""
+                             target:self
+                             action:@selector(scanlinesChanged:)];
+    box.state = apple2session_get_int(_session, "scanlines", 1)
+                    ? NSControlStateValueOn
+                    : NSControlStateValueOff;
+    return box;
+}
+
+- (void)scanlinesChanged:(id)sender
+{
+    NSButton *box = sender;
+    int on = box.state == NSControlStateValueOn ? 1 : 0;
+    apple2session_set_int(_session, "scanlines", on);
+    /* Smoothing is no longer its own control; it just follows scanlines. */
+    apple2session_set_int(_session, "smooth_scaling", on);
+    _machineDirty = YES;
+    [self applyDisplaySettings];
+}
+
 /* The display options, unlike the machine ones, apply live. */
 - (void)displaySettingChanged:(id)sender
 {
@@ -392,8 +417,7 @@ static const option_row kOptionRows[] = {
                        ]]
     ]];
     [rows addObject:@[
-        [NSTextField labelWithString:@"Smooth scaling"],
-        [self checkBoxForKey:"smooth_scaling" fallback:0]
+        [NSTextField labelWithString:@"Scanlines"], [self checkBoxForScanlines]
     ]];
 
     NSGridView *grid = [NSGridView gridViewWithViews:rows];
@@ -404,8 +428,9 @@ static const option_row kOptionRows[] = {
     NSTextField *note = [NSTextField
         labelWithString:@"FujiNet lives in slot 7, the bootable SmartPort "
                         @"slot the //e scans before the Disk ][ in slot 6.\n"
-                        @"Display options apply immediately. Machine options "
-                        @"take effect when this window is closed."];
+                        @"Aspect ratio applies immediately. Machine options "
+                        @"and Scanlines take effect when this window is "
+                        @"closed."];
     note.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
     note.textColor = NSColor.secondaryLabelColor;
 

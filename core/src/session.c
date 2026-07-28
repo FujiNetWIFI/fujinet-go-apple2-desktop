@@ -90,6 +90,8 @@ static const char *const k_video_modes[] = {
     "B&W TV", "Monochrome (Amber)", "Monochrome (Green)",
     "Monochrome (White)", "Color (RGB Card/Monitor)", NULL
 };
+/* AppleWin's own core option, VS_HALF_SCANLINES vs VS_NONE. */
+static const char *const k_video_styles[] = { "Half Scanlines", "None", NULL };
 
 /* The core's own default video mode is "Color (RGB Card/Monitor)", which
  * emulates an RGB card. On a machine with no such card it renders a *blank
@@ -98,6 +100,11 @@ static const char *const k_video_modes[] = {
  * composite monitor, which is also the most faithful to what an Apple II
  * actually looked like (and gives correct hi-res artifact colours). */
 #define APPLE2_DEFAULT_VIDEO_MODE "Color (Composite Monitor)"
+
+/* The core's own hidden default (Config_Load_Video's REGLOAD_DEFAULT) is
+ * already VS_HALF_SCANLINES, so this preserves existing behaviour for
+ * anyone who never touches the setting. */
+#define APPLE2_DEFAULT_VIDEO_STYLE "Half Scanlines"
 
 static const char *table_at(const char *const *tab, int idx)
 {
@@ -264,6 +271,7 @@ static void *emu_thread_main(void *arg)
     apple2host_set_variable(OPT_PREFIX "slot6", s->opt_slot6);
     apple2host_set_variable(OPT_PREFIX "slot7", s->opt_slot7);
     apple2host_set_variable(OPT_PREFIX "video_mode", s->opt_video_mode);
+    apple2host_set_variable(OPT_PREFIX "video_style", s->opt_video_style);
 
     /* Tell the external ROM loader where to look. Only a
      * WITH_APPLE_ROMS=OFF build reads this; setting it always keeps the two
@@ -452,6 +460,13 @@ void apple2session_default_opts(apple2session *s,
     adopt_opt(s, s->opt_video_mode, k_video_modes,
               apple2session_get_str(s, "video_mode", NULL),
               APPLE2_DEFAULT_VIDEO_MODE);
+    {
+        int scanlines = apple2session_get_int(s, "scanlines", 1);
+        adopt_opt(s, s->opt_video_style, k_video_styles,
+                  scanlines ? "Half Scanlines" : "None",
+                  APPLE2_DEFAULT_VIDEO_STYLE);
+        opts->scanlines = scanlines;
+    }
 
     opts->machine = s->opt_machine;
     opts->slot3 = s->opt_slot3;
@@ -484,6 +499,9 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
     adopt_opt(s, s->opt_slot7, k_slot7, opts->slot7, "FujiNet");
     adopt_opt(s, s->opt_video_mode, k_video_modes, opts->video_mode,
               APPLE2_DEFAULT_VIDEO_MODE);
+    adopt_opt(s, s->opt_video_style, k_video_styles,
+              opts->scanlines ? "Half Scanlines" : "None",
+              APPLE2_DEFAULT_VIDEO_STYLE);
     s->opts.machine = s->opt_machine;
     s->opts.slot3 = s->opt_slot3;
     s->opts.slot4 = s->opt_slot4;
@@ -660,8 +678,29 @@ void apple2session_paddle_button(apple2session *s, int button, int pressed)
 
 void apple2session_reset(apple2session *s, int mode)
 {
+    pthread_mutex_lock(&s->lifecycle_mtx);
+    if (!s->running) {
+        pthread_mutex_unlock(&s->lifecycle_mtx);
+        return;
+    }
+
+    /* A power cycle reboots the machine's peripheral cards too, not just the
+     * 6502/RAM -- on real hardware that means FujiNet's own firmware restarts
+     * along with it. Restart it here, on the caller's thread, exactly the way
+     * apple2session_start() does for the very first boot: the emulator thread
+     * keeps pumping frames throughout (fujinet_start blocks on the SLIP
+     * handshake, not on the core), and once FujiNet's SLIP client has
+     * reattached, reset_request re-runs the //e autostart boot scan so it
+     * finds the device again. A warm reset (Ctrl-Reset) leaves FujiNet alone,
+     * matching real hardware -- it does not power-cycle peripheral cards. */
+    if (mode && s->fujinet_running) {
+        fujinet_stop(s);
+        fujinet_start(s); /* not fatal if it fails; the machine still reboots */
+    }
+
     /* Latched here and applied by the emulator thread between frames. */
-    if (s->running) s->reset_request = mode ? 2 : 1;
+    s->reset_request = mode ? 2 : 1;
+    pthread_mutex_unlock(&s->lifecycle_mtx);
 }
 
 int apple2session_render_audio(apple2session *s, int16_t *out, int nsamples)

@@ -27,6 +27,10 @@
 #   FN_REFRESH=1        re-stage + re-patch even if the staged tree is current
 #   FN_CLEAN=1          throw the FujiNet build directory away first
 #   FN_PATCH_ONLY=1     stage and patch, but do not build
+#   FN_DEBUG=1          build libfujinet.so -g (firmware's own build.sh flag):
+#                       full debug info, no optimisation, so a firmware
+#                       developer can gdb it -- see README's "Debugging
+#                       FujiNet firmware" section
 
 set -euo pipefail
 
@@ -868,11 +872,21 @@ fi
 # ... or for a different target: one work tree serves the host build and a
 # cross build (mingw-w64), and their caches are not interchangeable.
 TARGET_KEY_FILE="${CLONE_DIR}/build/.apple-target"
-TARGET_KEY="${LIBNAME}|${FUJINET_CMAKE_ARGS:-}|${MBEDTLS_ROOT_DIR:-}"
+TARGET_KEY="${LIBNAME}|${FUJINET_CMAKE_ARGS:-}|${MBEDTLS_ROOT_DIR:-}|${FN_DEBUG:-0}"
 if [[ -f "${TARGET_KEY_FILE}" && "$(cat "${TARGET_KEY_FILE}")" != "${TARGET_KEY}" ]]; then
     echo "FujiNet build directory was made for another target; rebuilding clean"
     BUILD_FLAGS="-cp"
 fi
+
+# -g asks the firmware's own build.sh for a Debug build (full symbols, -O0):
+# libfujinet.so otherwise never carries debug info at all, Release being the
+# only configuration this wrapper ever asks for. Applied last, and prepended
+# rather than appended: build.sh's getopts has "p:" (it takes PC_TARGET as an
+# argument), so any flag placed after p in the same cluster is consumed as
+# p's OPTARG instead of parsed as its own flag -- "-pg" silently sets
+# PC_TARGET to "g" rather than enabling debug. Must also come after every
+# other place above that can still reassign BUILD_FLAGS, or it gets clobbered.
+[[ "${FN_DEBUG:-0}" -eq 1 ]] && BUILD_FLAGS="-g${BUILD_FLAGS#-}"
 
 (
     cd "${CLONE_DIR}"
@@ -885,3 +899,7 @@ collect_outputs
 echo "FujiNet Apple II desktop runtime outputs:"
 echo "  ${OUT_DIR}/${LIBNAME}"
 echo "  ${OUT_DIR}/{fnconfig.ini,data,SD}"
+if [[ "${FN_DEBUG:-0}" -eq 1 ]]; then
+    echo "Built with debug info (FN_DEBUG=1): FUJINET_LIB=${OUT_DIR}/${LIBNAME}" \
+         "gdb ./your-frontend"
+fi

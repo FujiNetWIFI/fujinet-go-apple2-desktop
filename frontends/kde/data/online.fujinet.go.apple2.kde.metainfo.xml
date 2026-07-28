@@ -42,6 +42,22 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.2" date="2026-07-27">
+      <description>
+        <p>
+          Settings now has a Scanlines toggle in place of Smooth scaling --
+          turning scanlines on also turns on smoothing, since the two look
+          best together. Power Cycle now restarts the FujiNet runtime along
+          with the machine, matching a real peripheral card's own reboot.
+          Fixed an occasional hang on quit when FujiNet's runtime was still
+          shutting down. The FujiNet web admin now binds 64001 instead of
+          8000. For firmware developers: a new
+          tools/fujinet/update-fujinet-firmware.sh script bumps the pinned
+          fujinet-firmware submodule, and FN_DEBUG=1 builds libfujinet.so
+          with full debug info for gdb.
+        </p>
+      </description>
+    </release>
     <release version="0.2.1" date="2026-07-27">
       <description>
         <p>

@@ -98,13 +98,19 @@ SettingsDialog::SettingsDialog(apple2session *session, QWidget *parent)
     });
     displayForm->addRow(QStringLiteral("Aspect ratio"), aspect);
 
-    auto *smooth = new QCheckBox(displayBox);
-    smooth->setChecked(apple2session_get_int(m_session, "smooth_scaling", 0));
-    connect(smooth, &QCheckBox::toggled, this, [this](bool on) {
+    /* Scanlines is a libretro core option (like Model/Video above), so it
+     * needs a restart -- but smoothing is no longer its own control, it just
+     * follows scanlines, and that half applies live like the rest of
+     * Display. */
+    auto *scanlines = new QCheckBox(displayBox);
+    scanlines->setChecked(apple2session_get_int(m_session, "scanlines", 1));
+    connect(scanlines, &QCheckBox::toggled, this, [this](bool on) {
+        apple2session_set_int(m_session, "scanlines", on ? 1 : 0);
         apple2session_set_int(m_session, "smooth_scaling", on ? 1 : 0);
+        m_machineDirty = true;
         emit displayChanged();
     });
-    displayForm->addRow(QStringLiteral("Smooth scaling"), smooth);
+    displayForm->addRow(QStringLiteral("Scanlines"), scanlines);
     outer->addWidget(displayBox);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);

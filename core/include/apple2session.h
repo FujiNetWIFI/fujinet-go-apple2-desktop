@@ -28,9 +28,12 @@ extern "C" {
 #define APPLE2SESSION_FB_MAX_HEIGHT 400
 
 /* SmartPort-over-SLIP loopback port (the emulator listens, FujiNet connects
- * in) and the FujiNet web admin port, both fixed to match the Android app. */
+ * in), fixed to match the Android app. The FujiNet web admin port is fixed
+ * too, but deliberately NOT 8000 (the Android app's port): 8000 is a common
+ * default that collides with other local dev servers, so the desktop targets
+ * use this one instead. */
 #define APPLE2SESSION_SLIP_PORT  1985
-#define APPLE2SESSION_WEBUI_PORT 8000
+#define APPLE2SESSION_WEBUI_PORT 64001
 
 typedef struct apple2session apple2session;
 typedef struct apple2debug apple2debug;
@@ -86,6 +89,9 @@ typedef struct {
      * rather than black, so this defaults to the composite monitor instead.
      * See apple2session_video_mode_name(). */
     const char *video_mode;
+    /* Half-scanline video style. The core's own hidden default is ON; this
+     * just makes it a settable option instead of a permanent default. */
+    int scanlines;
     int enable_fujinet;     /* start the in-process FujiNet runtime */
     int enable_audio;       /* open the SDL audio device */
     int enable_gamepad;     /* start the SDL gamepad thread */
