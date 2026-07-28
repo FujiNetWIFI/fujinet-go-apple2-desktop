@@ -16,6 +16,9 @@
 #include <QVBoxLayout>
 
 #ifdef HAVE_WEBENGINE
+#include <QDesktopServices>
+#include <QWebEngineNewWindowRequest>
+#include <QWebEnginePage>
 #include <QWebEngineView>
 #else
 #include <QDesktopServices>
@@ -37,6 +40,15 @@ void fujinet_config_show(QWidget *parent, apple2session *session)
     win->resize(1000, 760);
 
     auto *view = new QWebEngineView(win);
+    /* The FujiNet web UI's OneDrive/Google Drive "Authorize" buttons open the
+     * provider's consent page via window.open(). QWebEnginePage has no popup
+     * window of its own to show it in, so hand the URL to the system browser
+     * instead: Google and Microsoft both reject OAuth flows from an embedded
+     * webview's user-agent anyway. */
+    QObject::connect(view->page(), &QWebEnginePage::newWindowRequested, view,
+                      [](QWebEngineNewWindowRequest &request) {
+                          QDesktopServices::openUrl(request.requestedUrl());
+                      });
     view->load(QUrl(QString::fromUtf8(apple2session_fujinet_webui_url(session))));
     auto *layout = new QVBoxLayout(win);
     layout->setContentsMargins(0, 0, 0, 0);

@@ -42,6 +42,17 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.3" date="2026-07-28">
+      <description>
+        <p>
+          Fixed the OneDrive and Google Drive Authorize buttons in the
+          FujiNet web admin, which silently did nothing: the embedded web
+          view never handled the pop-up window they open. Clicking Authorize
+          now launches the system browser to the provider's consent page,
+          which is what Google and Microsoft require for OAuth anyway.
+        </p>
+      </description>
+    </release>
     <release version="0.2.2" date="2026-07-27">
       <description>
         <p>

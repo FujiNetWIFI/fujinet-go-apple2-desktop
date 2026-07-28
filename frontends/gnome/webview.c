@@ -15,6 +15,26 @@
 
 /* ---- configuration (web UI) --------------------------------------------- */
 
+#ifdef HAVE_WEBKIT
+/* The FujiNet web UI's OneDrive/Google Drive "Authorize" buttons open the
+ * provider's consent page via window.open(). WebKitGTK emits "create" for
+ * that and otherwise just drops it -- there is no popup window to show it
+ * in. Hand the URL to the system browser instead: Google and Microsoft both
+ * reject OAuth flows from an embedded webview's user-agent anyway. */
+static WebKitWebView *on_create_popup(WebKitWebView *web_view,
+                                       WebKitNavigationAction *navigation_action,
+                                       gpointer user_data)
+{
+    WebKitURIRequest *req = webkit_navigation_action_get_request(navigation_action);
+    const char *uri = req ? webkit_uri_request_get_uri(req) : NULL;
+    (void)web_view;
+    (void)user_data;
+    if (uri)
+        g_app_info_launch_default_for_uri(uri, NULL, NULL);
+    return NULL;
+}
+#endif
+
 void apple2_fujinet_config_show(GtkWindow *parent, apple2session *session)
 {
     if (!apple2session_fujinet_running(session)) {
@@ -39,6 +59,7 @@ void apple2_fujinet_config_show(GtkWindow *parent, apple2session *session)
                                      adw_header_bar_new());
         adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(tbview), view);
         adw_window_set_content(ADW_WINDOW(win), tbview);
+        g_signal_connect(view, "create", G_CALLBACK(on_create_popup), NULL);
         webkit_web_view_load_uri(WEBKIT_WEB_VIEW(view),
                                  apple2session_fujinet_webui_url(session));
         gtk_window_present(win);
