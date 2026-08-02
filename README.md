@@ -155,6 +155,7 @@ vice versa), so switching back just needs a plain
 | Platform | Artifact | Built by |
 |---|---|---|
 | Linux | `.flatpak` bundle, one per frontend | `build-aux/flatpak/online.fujinet.go.apple2.{gnome,kde}.yml` |
+| Linux | `.deb`/`.rpm`/`.tar.gz`, one per frontend | the `linux-packages` CI job (CPack) |
 | macOS | `.app` bundle, zipped with `ditto` | the `macos` CI job |
 | Windows | portable folder **and** an NSIS installer (per-user, no UAC) | the `windows` CI job + `build-aux/windows/installer.nsi` |
 
