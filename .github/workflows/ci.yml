@@ -114,6 +114,62 @@ jobs:
           cmake --build build-noroms
           ctest --test-dir build-noroms --output-on-failure
 
+  # The Linux distributable alongside the flatpak: one CPack package per
+  # frontend (GNOME/KDE pull different runtime library stacks, so a user
+  # who wants one should not be made to depend on the other), matching
+  # fujinet-go-coco-desktop's own linux-packages job. WITH_APPLE_ROMS stays
+  # at its default (ON), same policy as every other artifact this workflow
+  # publishes -- see the top-of-file note and COMPLIANCE.md.
+  linux-packages:
+    strategy:
+      fail-fast: false
+      matrix:
+        frontend: [gnome, kde]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgtk-4-dev libadwaita-1-dev \
+            libwebkitgtk-6.0-dev qt6-base-dev qt6-webengine-dev \
+            libssl-dev libexpat1-dev zlib1g-dev libkrb5-dev libgnutls28-dev \
+            libboost-dev python3-venv python3-yaml python3-jinja2 \
+            desktop-file-utils dpkg-dev rpm
+      - name: Install SDL3 build dependencies
+        run: |
+          sudo apt-get install -y libx11-dev libxext-dev libxcursor-dev \
+            libxi-dev libxfixes-dev libxrandr-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libwayland-dev libdecor-0-dev libasound2-dev \
+            libpulse-dev libudev-dev libdbus-1-dev
+      - name: Build and install SDL3
+        run: |
+          git clone --depth 1 --branch release-3.4.12 \
+            https://github.com/libsdl-org/SDL.git sdl3-src
+          cmake -S sdl3-src -B sdl3-src/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF
+          cmake --build sdl3-src/build
+          sudo cmake --install sdl3-src/build
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_INSTALL_PREFIX=/usr -DFRONTEND=${{ matrix.frontend }}
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Package (deb, rpm, tar.gz)
+        working-directory: build
+        run: cpack -G "DEB;RPM;TGZ"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: linux-packages-${{ matrix.frontend }}
+          path: |
+            build/*.deb
+            build/*.rpm
+            build/*.tar.gz
+          if-no-files-found: error
+
   macos:
     runs-on: macos-15
     steps:
@@ -375,7 +431,7 @@ jobs:
   # manifests, and COMPLIANCE.md.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos, windows, flatpak]
+    needs: [linux, linux-packages, macos, windows, flatpak]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -409,6 +465,9 @@ jobs:
         run: |
           tag="${GITHUB_REF#refs/tags/v}"
           mkdir -p release
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' \
+                                    -o -name '*.tar.gz' \) \
+            -exec cp {} release/ \;
           (cd artifacts/FujiNet-Go-Apple2-windows \
            && zip -qr "../../release/FujiNet-Go-Apple2-${tag}-windows.zip" .)
           cp "artifacts/FujiNet-Go-Apple2-macos/FujiNet-Go-Apple2-macos.zip" \

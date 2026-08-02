@@ -180,6 +180,15 @@ job refuses to publish if the tag, `CMakeLists.txt` and the metainfo disagree,
 and creates the release as a **draft** so the notes can be written before it
 goes out.
 
+| Asset | Contents |
+|---|---|
+| `fujinet-go-apple2-gnome-<version>-Linux.{deb,rpm,tar.gz}` | the GNOME frontend, packaged with CPack |
+| `fujinet-go-apple2-kde-<version>-Linux.{deb,rpm,tar.gz}` | the KDE frontend, packaged with CPack |
+| `FujiNet-Go-Apple2-<version>-macos.zip` | the `.app` bundle (SDL and FujiNet inside) |
+| `FujiNet-Go-Apple2-<version>-windows.zip` | the exe, `fujinet.dll`, and the `fujinet/` runtime tree |
+| `FujiNet-Go-Apple2-<version>-windows-setup.exe` | NSIS installer (per-user, no admin rights) |
+| `FujiNet-Go-Apple2-<version>-gnome.flatpak` / `-kde.flatpak` | single-file bundle: `flatpak install ./…flatpak` |
+
 ## Layout
 
 ```
