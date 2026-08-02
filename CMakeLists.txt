@@ -112,3 +112,54 @@ foreach(_size IN LISTS APPLE2_ICON_SIZES)
             RENAME ${_id}.png)
   endforeach()
 endforeach()
+
+# ---- packaging --------------------------------------------------------
+#
+# One package per frontend, not one package for both: GNOME (GTK4/
+# libadwaita) and KDE (Qt6) pull in entirely different runtime library
+# stacks, and a user who wants one should not be made to depend on the
+# other. So this expects FRONTEND=gnome or FRONTEND=kde -- exactly the same
+# per-frontend split the flatpak manifests already use -- and names the
+# package accordingly; FRONTEND=all (the default) still configures fine for
+# ordinary development builds, it just packages under a name that says so
+# rather than silently mixing both frontends' files into one archive.
+if(FRONTEND STREQUAL "gnome")
+  set(CPACK_PACKAGE_NAME "fujinet-go-apple2-gnome")
+elseif(FRONTEND STREQUAL "kde")
+  set(CPACK_PACKAGE_NAME "fujinet-go-apple2-kde")
+else()
+  set(CPACK_PACKAGE_NAME "fujinet-go-apple2")
+endif()
+
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_VENDOR "FujiNet")
+set(CPACK_PACKAGE_CONTACT "https://github.com/FujiNetWIFI/fujinet-go-apple2-desktop/issues")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://fujinet.online/")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Self-contained Apple II with built-in FujiNet")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+set(CPACK_STRIP_FILES ON)
+
+if(UNIX AND NOT APPLE)
+  set(CPACK_GENERATOR "DEB;RPM;TGZ")
+
+  # Auto-detected from the actual linked libraries (dpkg-shlibdeps /
+  # rpmbuild's own dependency generator) rather than hand-listed: GTK4 vs
+  # Qt6 alone makes one fixed list wrong for whichever frontend was not
+  # built, and a hand-list silently goes stale the moment a dependency's
+  # package name changes across distributions.
+  set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+  set(CPACK_DEBIAN_PACKAGE_SECTION "games")
+  set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "${CPACK_PACKAGE_HOMEPAGE_URL}")
+
+  set(CPACK_RPM_PACKAGE_AUTOREQPROV ON)
+  set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later")
+  set(CPACK_RPM_PACKAGE_GROUP "Amusements/Games")
+  set(CPACK_RPM_PACKAGE_URL "${CPACK_PACKAGE_HOMEPAGE_URL}")
+endif()
+
+# CPACK_PACKAGE_FILE_NAME defaults to <name>-<version>-<system>[-<arch>];
+# left as-is except spelling out the generator explicitly is unnecessary --
+# the default already includes it via the file extension.
+include(CPack)
