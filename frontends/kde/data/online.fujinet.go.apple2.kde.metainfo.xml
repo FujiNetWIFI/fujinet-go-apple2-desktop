@@ -42,6 +42,17 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.0" date="2026-08-29">
+      <description>
+        <p>
+          Updated the bundled FujiNet firmware, which adds calendar support:
+          the new CALENDAR, GCAL and ICAL network protocols let programs read
+          Google Calendar and iCalendar feeds over N:. The update also brings
+          in HTML parsing and channel mode for N:, a device password with web
+          admin management, and a large round of upstream fixes.
+        </p>
+      </description>
+    </release>
     <release version="0.2.4" date="2026-08-02">
       <description>
         <p>

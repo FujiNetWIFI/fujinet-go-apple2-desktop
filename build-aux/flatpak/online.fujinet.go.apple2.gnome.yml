@@ -175,5 +175,5 @@ modules:
         dest: third_party/applewin
       - type: git
         url: https://github.com/FujiNetWIFI/fujinet-firmware
-        commit: 7a994abff300225dfc4bb0fda3da677050654979
+        commit: cd7c0eb9a543845a3b934bc52663eeedc4656f92
         dest: third_party/fujinet-firmware
