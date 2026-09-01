@@ -24,7 +24,7 @@ find_package(Git QUIET)
 # that the FujiNet link depends on, which upstream does not have.
 set(APPLEWIN_COMMIT "25e8ddd139f9ebe02c55e94463e8b876ddd1afc1")
 set(APPLEWIN_URL "https://github.com/FujiNetWIFI/AppleWin")
-set(FUJINET_COMMIT "cd7c0eb9a543845a3b934bc52663eeedc4656f92")
+set(FUJINET_COMMIT "07e1bed306c43d6aadaf6f1fabf92e16aa759a09")
 set(FUJINET_URL "https://github.com/FujiNetWIFI/fujinet-firmware")
 
 # apple2_provide_dependency(NAME <n> PATH <p> URL <u> COMMIT <sha>

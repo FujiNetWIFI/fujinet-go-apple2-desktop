@@ -42,6 +42,24 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.1" date="2026-09-01">
+      <description>
+        <p>
+          The bundled FujiNet runtime moves to a firmware build that refuses
+          to compile against Mbed TLS 4.x. That release removed the low-level
+          crypto headers the runtime's TLS backend needs and split the rest
+          into a separate library, so a machine whose system Mbed TLS had
+          moved to 4.x could produce a build with broken TLS instead of a
+          clear failure. The build now finds a 3.x install, or stops and says
+          so.
+        </p>
+        <p>
+          It also picks up Gmail message composition, and the calendar
+          protocols gain the ability to create and edit events rather than
+          only read them.
+        </p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-08-29">
       <description>
         <p>

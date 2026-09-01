@@ -142,6 +142,7 @@ PY
         cmake -S "${MBEDTLS_SOURCE_DIR}" -B "${MBEDTLS_BUILD_DIR}" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="${MBEDTLS_INSTALL_DIR}" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
             -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF \
             -DMBEDTLS_FATAL_WARNINGS=OFF \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -515,49 +516,6 @@ patch("fujinet_pc.cmake", [
     ),
 ])
 
-# --- mbedTLS resolution: honor MBEDTLS_ROOT_DIR explicitly ----------------
-# find_library does not descend into <root>/lib from a HINTS directory, so
-# a caller-provided root (the pinned 3.6.5 the macOS build makes) must be
-# resolved by explicit paths -- the same approach the Android build uses.
-# Without the env var (Linux: system mbedtls) the stock search runs.
-patch("fujinet_pc.cmake", [
-    (
-        'set(_MBEDTLS_ROOT_HINTS $ENV{MBEDTLS_ROOT_DIR} ${MBEDTLS_ROOT_DIR})\n'
-        'set(_MBEDTLS_ROOT_PATHS "$ENV{PROGRAMFILES}/libmbedtls")\n'
-        'set(_MBEDTLS_ROOT_HINTS_AND_PATHS HINTS ${_MBEDTLS_ROOT_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
-        'find_library(MBEDTLS_STATIC_LIB libmbedtls.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        'find_library(MBEDX509_STATIC_LIB libmbedx509.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        'find_library(MBEDCRYPTO_STATIC_LIB libmbedcrypto.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        'find_path(MBEDTLS_INCLUDE_DIR mbedtls/ssl.h HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS} PATH_SUFFIXES include)\n',
-        'if(DEFINED ENV{MBEDTLS_ROOT_DIR} AND EXISTS "$ENV{MBEDTLS_ROOT_DIR}/include/mbedtls/ssl.h")\n'
-        '    # The library directory under the root is whatever GNUInstallDirs\n'
-        '    # chose when mbedTLS was installed there: lib, lib64 (flatpak\n'
-        '    # runtime, Fedora) or a multiarch directory.\n'
-        '    set(_MBEDTLS_LIBDIR "")\n'
-        '    foreach(_d lib lib64 lib/${CMAKE_LIBRARY_ARCHITECTURE})\n'
-        '        if(EXISTS "$ENV{MBEDTLS_ROOT_DIR}/${_d}/libmbedtls.a")\n'
-        '            set(_MBEDTLS_LIBDIR "$ENV{MBEDTLS_ROOT_DIR}/${_d}")\n'
-        '            break()\n'
-        '        endif()\n'
-        '    endforeach()\n'
-        '    if(NOT _MBEDTLS_LIBDIR)\n'
-        '        message(FATAL_ERROR "no libmbedtls.a under $ENV{MBEDTLS_ROOT_DIR}")\n'
-        '    endif()\n'
-        '    set(MBEDTLS_STATIC_LIB "${_MBEDTLS_LIBDIR}/libmbedtls.a")\n'
-        '    set(MBEDX509_STATIC_LIB "${_MBEDTLS_LIBDIR}/libmbedx509.a")\n'
-        '    set(MBEDCRYPTO_STATIC_LIB "${_MBEDTLS_LIBDIR}/libmbedcrypto.a")\n'
-        '    set(MBEDTLS_INCLUDE_DIR "$ENV{MBEDTLS_ROOT_DIR}/include")\n'
-        'else()\n'
-        '    set(_MBEDTLS_ROOT_HINTS $ENV{MBEDTLS_ROOT_DIR} ${MBEDTLS_ROOT_DIR})\n'
-        '    set(_MBEDTLS_ROOT_PATHS "$ENV{PROGRAMFILES}/libmbedtls")\n'
-        '    set(_MBEDTLS_ROOT_HINTS_AND_PATHS HINTS ${_MBEDTLS_ROOT_HINTS} PATHS ${_MBEDTLS_ROOT_PATHS})\n'
-        '    find_library(MBEDTLS_STATIC_LIB libmbedtls.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        '    find_library(MBEDX509_STATIC_LIB libmbedx509.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        '    find_library(MBEDCRYPTO_STATIC_LIB libmbedcrypto.a HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS})\n'
-        '    find_path(MBEDTLS_INCLUDE_DIR mbedtls/ssl.h HINTS ${_MBEDTLS_ROOT_HINTS_AND_PATHS} PATH_SUFFIXES include)\n'
-        'endif()\n',
-    ),
-])
 patch("components_pc/libssh/cmake/Modules/FindMbedTLS.cmake", [
     (
         'find_path(MBEDTLS_INCLUDE_DIR\n',
@@ -651,63 +609,6 @@ patch("lib/hardware/fnSystem.cpp", [
         '#endif\n',
     ),
 ])
-
-# --- pc_rtos task shim: name worker threads after their FreeRTOS task ------
-patch("lib/compat/pc_rtos/pc_rtos.cpp", [
-    (
-        '#include <mutex>\n'
-        '#include <thread>\n',
-        '#include <mutex>\n'
-        '#include <pthread.h>\n'
-        '#include <thread>\n',
-    ),
-    (
-        'static BaseType_t pc_task_create(TaskFunction_t fn, void *arg, TaskHandle_t *out_handle)\n'
-        '{\n'
-        '    std::thread t([fn, arg] { fn(arg); });\n'
-        '    t.detach();\n',
-        'static BaseType_t pc_task_create(TaskFunction_t fn, const char *name, void *arg, TaskHandle_t *out_handle)\n'
-        '{\n'
-        '    std::thread t([fn, arg, name] {\n'
-        '        if (name && *name) {\n'
-        '            char tn[16];\n'
-        '            strncpy(tn, name, sizeof(tn) - 1);\n'
-        '            tn[sizeof(tn) - 1] = 0;\n'
-        '#if defined(__APPLE__)\n'
-        '            pthread_setname_np(tn);\n'
-        '#else\n'
-        '            pthread_setname_np(pthread_self(), tn);\n'
-        '#endif\n'
-        '        }\n'
-        '        fn(arg);\n'
-        '    });\n'
-        '    t.detach();\n',
-    ),
-    (
-        'extern "C" BaseType_t xTaskCreate(TaskFunction_t fn, const char *, uint32_t, void *arg,\n'
-        '                                  UBaseType_t, TaskHandle_t *out_handle)\n'
-        '{\n'
-        '    return pc_task_create(fn, arg, out_handle);\n'
-        '}\n',
-        'extern "C" BaseType_t xTaskCreate(TaskFunction_t fn, const char *name, uint32_t, void *arg,\n'
-        '                                  UBaseType_t, TaskHandle_t *out_handle)\n'
-        '{\n'
-        '    return pc_task_create(fn, name, arg, out_handle);\n'
-        '}\n',
-    ),
-    (
-        'extern "C" BaseType_t xTaskCreatePinnedToCore(TaskFunction_t fn, const char *, uint32_t, void *arg,\n'
-        '                                              UBaseType_t, TaskHandle_t *out_handle, BaseType_t)\n'
-        '{\n'
-        '    return pc_task_create(fn, arg, out_handle);\n'
-        '}\n',
-        'extern "C" BaseType_t xTaskCreatePinnedToCore(TaskFunction_t fn, const char *name, uint32_t, void *arg,\n'
-        '                                              UBaseType_t, TaskHandle_t *out_handle, BaseType_t)\n'
-        '{\n'
-        '    return pc_task_create(fn, name, arg, out_handle);\n'
-        '}\n',
-    ),
-], required=False)
 
 # --- Drop in the desktop entry-point wrapper + export map -----------------
 desktop_dir = clone_dir / "desktop"
