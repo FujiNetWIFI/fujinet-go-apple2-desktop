@@ -42,6 +42,18 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.2" date="2026-09-02">
+      <description>
+        <p>
+          The bundled FujiNet runtime moves back onto upstream master. The
+          previous build came from force-mbedtls-3, a branch that was never
+          merged, so the runtime had been standing still while upstream moved
+          on. The Mbed TLS 3.x requirement it was branched for has landed, and
+          the device-chain rework and the Drivewire cassette media format
+          arrive with it.
+        </p>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-09-01">
       <description>
         <p>
