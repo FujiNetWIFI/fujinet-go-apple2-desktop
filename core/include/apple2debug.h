@@ -158,6 +158,30 @@ uint16_t apple2debug_view_base(apple2debug_view view);
 int apple2debug_render_view(apple2debug *d, apple2debug_view view,
                             uint32_t *dst);
 
+/* ---- FujiNet: the SmartPort packets on the SLIP link, both ways -----------
+ * Every request the SmartPort card sends FujiNet and every reply, recorded
+ * from session start whether or not a debugger window is open: it is most
+ * useful about what happened before anyone looked. The newest 512 are kept,
+ * and consecutive identical exchanges (all but the sequence number) fold into
+ * one with a repeat count. Safe to call from any thread. */
+typedef struct {
+    uint64_t serial;        /* rises with every change, including a fold */
+    int      to_host;       /* 1: FujiNet -> Apple II (a reply), 0: a request */
+    int      device;        /* the unit, -1 if unknown */
+    int      command;       /* request: SmartPort command; reply: its status */
+    int      length;        /* bytes past the header, -1 if short */
+    int      nbytes;
+    uint8_t  data[64];      /* the packet's first bytes */
+    char     text[96];      /* "-> #2A STATUS u1 THE_FUJI E8 GET ADAPTERCONFIG" */
+    uint32_t repeat;        /* identical exchanges folded into this one */
+} apple2_fuji_packet;
+/* The newest max packets, oldest first; returns the count. */
+int  apple2debug_fujinet_trace(apple2debug *d, apple2_fuji_packet *out, int max);
+void apple2debug_fujinet_trace_clear(apple2debug *d);
+/* The SmartPort card, FujiNet's link and the units it has named, as text
+ * lines; returns the length. */
+int  apple2debug_fujinet_state(apple2debug *d, char *dst, int dstsz);
+
 /* ---- symbols -------------------------------------------------------------
  * AppleWin ships APPLE2E.SYM / A2_BASIC.SYM / A2_DOS33.SYM2, which the
  * staging step already copies into the tree -- so unlike the ADAM target

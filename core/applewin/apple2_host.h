@@ -21,6 +21,7 @@
 #ifndef APPLE2_HOST_H
 #define APPLE2_HOST_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -100,6 +101,25 @@ unsigned apple2host_step_instruction(void);
  * inspecting $C000-$CFFF in a debugger cannot toggle hardware. */
 void apple2host_read_mem(uint16_t addr, uint8_t *out, unsigned len);
 void apple2host_write_mem(uint16_t addr, const uint8_t *in, unsigned len);
+
+/* ---- FujiNet trace seam --------------------------------------------------
+ * Every SmartPort request the card sends FujiNet over SLIP, and the reply:
+ * kind 0 is a request, 1 its reply, 2 no reply in time (buf NULL). seq is
+ * the request's sequence number; buf is the whole packet, SLIP-decoded.
+ *
+ * Called on the emulator thread (the card) AND on the SmartPort Listener's
+ * thread (its INIT scan when FujiNet connects), so the sink must lock. Set it
+ * before apple2host_core_start: the card's constructor starts the Listener.
+ * NULL removes it; this layer serialises the sink against its callers, so
+ * once that returns the old sink is never called again. */
+typedef void (*Apple2SpTraceSink)(int kind, uint8_t seq, const uint8_t *buf,
+                                  size_t len, void *user);
+void apple2host_set_sp_trace(Apple2SpTraceSink sink, void *user);
+
+/* SmartPort devices FujiNet has registered with the card's Listener; 0 means
+ * no link. Read from the Listener on the emulator thread after each frame
+ * and cached, so any thread may call this. */
+int apple2host_fujinet_devices(void);
 
 /* Pull interleaved stereo int16 @ 44100Hz. Blocks briefly for a full block
  * (bounded, ~1.5 block durations) then silence-pads, so the caller always

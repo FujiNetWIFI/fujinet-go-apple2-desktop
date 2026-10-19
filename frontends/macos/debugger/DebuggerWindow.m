@@ -1,8 +1,9 @@
 /*
- * Debugger window (AppKit): run control, 6502 registers, disassembly with
- * click-to-toggle breakpoints, and a memory view -- the same shape as the
- * GNOME, KDE and Win32 debuggers, over the same shared engine
- * (core/debugger).
+ * Debugger window (AppKit): run control, and two tabs. CPU has the 6502
+ * registers, disassembly with click-to-toggle breakpoints, a memory view and
+ * a video page; FujiNet has the SmartPort packets the card and FujiNet
+ * exchange, both ways, and the card's state -- the same shape as the GNOME,
+ * KDE and Win32 debuggers, over the same shared engine (core/debugger).
  *
  * The engine's rule is that only the emulator thread touches AppleWin, and
  * its stop callback therefore FIRES ON THE EMULATOR THREAD. It is marshalled
@@ -23,12 +24,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "apple2debug.h"
 
 #define DISASM_LINES 24
 #define MEM_COLS 16
 #define MEM_ROWS 24
+#define TRACE_MAX 512
+
+enum { TAB_CPU, TAB_FUJINET, TAB_COUNT };
+
+/* APPLE2_DEBUGGER_TAB takes a page number or the start of a name. */
+static const char *const kTabNames[TAB_COUNT] = { "cpu", "fujinet" };
 
 static DebuggerWindow *g_debugger;
 
@@ -59,7 +67,7 @@ static DebuggerWindow *g_debugger;
 }
 @end
 
-@interface DebuggerWindow () <NSWindowDelegate>
+@interface DebuggerWindow () <NSWindowDelegate, NSTabViewDelegate>
 - (instancetype)initWithSession:(apple2session *)session;
 - (void)onStopped:(apple2debug_stop_reason)reason pc:(uint16_t)pc;
 @end
@@ -83,6 +91,14 @@ static DebuggerWindow *g_debugger;
     NSPopUpButton *_viewPick;
     NSImageView *_viewPic;
     uint32_t *_viewFb;
+
+    NSTabView *_tabs;
+    NSTextField *_fujiNote;
+    NSTextView *_fujiText;
+    NSTextView *_cardText;
+    int _fujiCount;         /* what the log shows: rebuilt only on a change */
+    uint64_t _fujiLast;
+    int _ticks;
 
     NSTimer *_tick;
     id _keyMonitor;
@@ -117,6 +133,51 @@ static NSScrollView *monoScroll(Class cls, NSRect frame)
     scroll.documentView = view;
 
     return scroll;
+}
+
+static NSString *utf8(const char *s)
+{
+    NSString *r = s ? [NSString stringWithUTF8String:s] : nil;
+    return r ?: @"";
+}
+
+/* Whether a view's reader is at its end (a log then follows new lines). */
+static BOOL atEnd(NSTextView *view)
+{
+    NSScrollView *scroll = view.enclosingScrollView;
+    if (!scroll) return YES;
+    return NSMaxY(scroll.contentView.documentVisibleRect) >= NSHeight(view.frame) - 4;
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+static void setText(NSTextView *view, NSString *text, BOOL follow)
+{
+    if (![view.string isEqualToString:text]) {
+        NSScrollView *scroll = view.enclosingScrollView;
+        const NSPoint at = scroll ? scroll.contentView.bounds.origin : NSZeroPoint;
+        view.string = text;
+        if (scroll && !follow) {
+            [scroll.contentView scrollToPoint:at];
+            [scroll reflectScrolledClipView:scroll.contentView];
+        }
+    }
+    if (follow) [view scrollRangeToVisible:NSMakeRange(view.string.length, 0)];
+}
+
+/* APPLE2_DEBUGGER_TAB: a page number, or the start of a tab's name. */
+static int tabFromEnv(void)
+{
+    const char *tab = getenv("APPLE2_DEBUGGER_TAB");
+    char *end;
+    long n;
+    if (!tab || !*tab) return -1;
+    n = strtol(tab, &end, 10);
+    if (end != tab && *end == '\0')
+        return (n >= 0 && n < TAB_COUNT) ? (int)n : -1;
+    for (int i = 0; i < TAB_COUNT; i++)
+        if (strncasecmp(tab, kTabNames[i], strlen(tab)) == 0) return i;
+    return -1;
 }
 
 /* EMULATOR THREAD. Does nothing but hand the event to the main queue. */
@@ -199,9 +260,27 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     _status.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     [root addSubview:_status];
 
+    /* Two tabs under the toolbar: CPU is the view below as it stands,
+     * FujiNet follows it. Each page is laid out in the tab view's content
+     * area and resizes with it. */
+    _tabs = [[NSTabView alloc]
+        initWithFrame:NSMakeRect(6, 6, W - 12, toolbarY - 12)];
+    _tabs.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    NSTabViewItem *cpuItem = [[NSTabViewItem alloc] initWithIdentifier:@"cpu"];
+    cpuItem.label = @"CPU";
+    [_tabs addTabViewItem:cpuItem];
+    NSTabViewItem *fujiItem =
+        [[NSTabViewItem alloc] initWithIdentifier:@"fujinet"];
+    fujiItem.label = @"FujiNet";
+    [_tabs addTabViewItem:fujiItem];
+    const NSSize page = _tabs.contentRect.size;
+    NSView *cpu =
+        [[NSView alloc] initWithFrame:NSMakeRect(0, 0, page.width, page.height)];
+
     /* Disassembly on the left, registers and memory stacked on the right --
      * the same split the other frontends use. */
-    const CGFloat bodyTop = toolbarY - 12;   /* y of the top of the body */
+    const CGFloat PW = page.width;
+    const CGFloat bodyTop = page.height - 8;   /* y of the top of the body */
     const CGFloat bodyH = bodyTop - 12;
     const CGFloat leftW = 520;
 
@@ -213,16 +292,16 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     _disasm.onToggleAddr = ^(uint16_t addr) {
       [weakSelf toggleBreakpoint:addr];
     };
-    [root addSubview:dasmScroll];
+    [cpu addSubview:dasmScroll];
 
     const CGFloat rx = 12 + leftW + 12;
-    const CGFloat rw = W - rx - 12;
+    const CGFloat rw = PW - rx - 12;
     const CGFloat regsH = 88;
 
     NSTextField *regLabel = [NSTextField labelWithString:@"Registers"];
     regLabel.frame = NSMakeRect(rx, bodyTop - 18, rw, 18);
     regLabel.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
-    [root addSubview:regLabel];
+    [cpu addSubview:regLabel];
 
     NSScrollView *regScroll =
         monoScroll([NSTextView class],
@@ -230,14 +309,14 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     regScroll.hasVerticalScroller = NO;
     regScroll.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     _regs = regScroll.documentView;
-    [root addSubview:regScroll];
+    [cpu addSubview:regScroll];
 
     const CGFloat memLabelY = bodyTop - 22 - regsH - 26;
     NSTextField *memLabel =
         [NSTextField labelWithString:@"Memory (address or symbol, Enter)"];
     memLabel.frame = NSMakeRect(rx, memLabelY, rw, 18);
     memLabel.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
-    [root addSubview:memLabel];
+    [cpu addSubview:memLabel];
 
     const CGFloat memAddrY = memLabelY - 26;
     _memAddr = [[NSTextField alloc]
@@ -245,7 +324,7 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     _memAddr.target = self;
     _memAddr.action = @selector(memAddrEntered:);
     _memAddr.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
-    [root addSubview:_memAddr];
+    [cpu addSubview:_memAddr];
 
     /* The video pane is a fixed 280x192 plus its popup and sits at the bottom
      * of the column; the memory dump takes whatever is left above it, so
@@ -259,7 +338,7 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
         monoScroll([NSTextView class], NSMakeRect(rx, 12 + videoH, rw, memH));
     memScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _memView = memScroll.documentView;
-    [root addSubview:memScroll];
+    [cpu addSubview:memScroll];
 
     /* Video page viewer. The page list comes from the engine, so a view added
      * there shows up here with no edit. */
@@ -272,7 +351,7 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     _viewPick.target = self;
     _viewPick.action = @selector(viewPickChanged:);
     _viewPick.autoresizingMask = NSViewWidthSizable;
-    [root addSubview:_viewPick];
+    [cpu addSubview:_viewPick];
 
     _viewPic = [[NSImageView alloc]
         initWithFrame:NSMakeRect(rx, 12, APPLE2VIEW_WIDTH,
@@ -283,7 +362,15 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     _viewPic.wantsLayer = YES;
     _viewPic.layer.backgroundColor = NSColor.blackColor.CGColor;
     _viewPic.layer.magnificationFilter = kCAFilterNearest;
-    [root addSubview:_viewPic];
+    [cpu addSubview:_viewPic];
+
+    cpuItem.view = cpu;
+    fujiItem.view = [self buildFujinet:page];
+    const int tab = tabFromEnv();
+    if (tab >= 0)
+        [_tabs selectTabViewItemAtIndex:tab];
+    _tabs.delegate = self;
+    [root addSubview:_tabs];
 
     [_window center];
 
@@ -332,6 +419,64 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
                                               }];
     [self refreshAll];
     return self;
+}
+
+/* The FujiNet tab: the packets on the left (a note and Clear over them), the
+ * card on the right. */
+- (NSView *)buildFujinet:(NSSize)size
+{
+    const CGFloat W = size.width, H = size.height;
+    const CGFloat rightW = 320;
+    const CGFloat leftW = W - 12 - 12 - 12 - rightW;
+    const CGFloat rx = 12 + leftW + 12;
+    const CGFloat top = H - 8;
+    NSView *page = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, W, H)];
+
+    NSTextField *title =
+        [NSTextField labelWithString:@"SmartPort packets (SLIP-decoded)"];
+    title.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+    title.frame = NSMakeRect(12, top - 18, leftW, 18);
+    title.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+    [page addSubview:title];
+
+    NSButton *clear = [self button:@"Clear"
+                            action:@selector(fujiClear:)
+                             frame:NSMakeRect(12 + leftW - 80, top - 50, 80, 26)];
+    clear.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
+    [page addSubview:clear];
+
+    _fujiNote = [NSTextField labelWithString:@""];
+    _fujiNote.textColor = NSColor.secondaryLabelColor;
+    _fujiNote.lineBreakMode = NSLineBreakByTruncatingTail;
+    _fujiNote.frame = NSMakeRect(12, top - 46, leftW - 88, 18);
+    _fujiNote.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+    [page addSubview:_fujiNote];
+
+    /* Not wrapped: a hex row is up to 64 bytes. */
+    NSScrollView *logScroll = monoScroll(
+        [NSTextView class], NSMakeRect(12, 12, leftW, top - 58 - 12));
+    logScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    logScroll.hasHorizontalScroller = YES;
+    _fujiText = logScroll.documentView;
+    _fujiText.horizontallyResizable = YES;
+    _fujiText.textContainer.widthTracksTextView = NO;
+    _fujiText.textContainer.size = NSMakeSize(FLT_MAX, FLT_MAX);
+    [page addSubview:logScroll];
+
+    NSTextField *cardTitle = [NSTextField labelWithString:@"SmartPort card"];
+    cardTitle.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+    cardTitle.frame = NSMakeRect(rx, top - 18, rightW, 18);
+    cardTitle.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
+    [page addSubview:cardTitle];
+
+    NSScrollView *cardScroll = monoScroll(
+        [NSTextView class], NSMakeRect(rx, 12, rightW, top - 22 - 12));
+    cardScroll.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
+    _cardText = cardScroll.documentView;
+    [page addSubview:cardScroll];
+
+    _fujiCount = -1;
+    return page;
 }
 
 - (void)dealloc
@@ -482,6 +627,75 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     [self renderVideo];
 }
 
+- (int)currentTab
+{
+    return (int)[_tabs indexOfTabViewItem:_tabs.selectedTabViewItem];
+}
+
+/* The note, the card's state, and the log -- rebuilt only when it changed
+ * (or on force), so a reader scrolled up stays where they are. */
+- (void)refreshFujinet:(BOOL)force
+{
+    static apple2_fuji_packet p[TRACE_MAX];
+    static char card[4096];
+    if (!_dbg)
+        return;
+    const int n = apple2debug_fujinet_trace(_dbg, p, TRACE_MAX);
+    const int slot = apple2session_fujinet_slot(_session);
+
+    if (!slot)
+        _fujiNote.stringValue = @"FujiNet is off (Preferences ▸ Slots).";
+    else if (!apple2session_fujinet_running(_session))
+        _fujiNote.stringValue = [NSString
+            stringWithFormat:@"FujiNet's card is in slot %d, but FujiNet is "
+                             @"not running.", slot];
+    else
+        _fujiNote.stringValue = [NSString
+            stringWithFormat:@"FujiNet is on the slot %d SmartPort card%@.", slot,
+                             apple2session_fujinet_link(_session)
+                                 ? @", connected" : @", not connected"];
+    card[0] = '\0';
+    apple2debug_fujinet_state(_dbg, card, (int)sizeof card);
+    setText(_cardText, utf8(card), NO);
+
+    if (!force && n == _fujiCount && (n == 0 || p[n - 1].serial == _fujiLast))
+        return;
+    _fujiCount = n;
+    _fujiLast = n > 0 ? p[n - 1].serial : 0;
+    const BOOL follow = force || atEnd(_fujiText);
+    NSMutableString *out = [NSMutableString string];
+    for (int i = 0; i < n; i++) {
+        if (i)
+            [out appendString:@"\n"];
+        [out appendString:utf8(p[i].text)];
+        [out appendString:@"\n     "];
+        for (int k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            [out appendFormat:@"%02X ", p[i].data[k]];
+        if (p[i].nbytes > (int)sizeof p[i].data)
+            [out appendString:@"…"];
+    }
+    if (n == 0)
+        [out appendString:@"(no SmartPort packets since the trace was cleared)"];
+    setText(_fujiText, out, follow);
+}
+
+- (void)fujiClear:(id)sender
+{
+    (void)sender;
+    if (!_dbg)
+        return;
+    apple2debug_fujinet_trace_clear(_dbg);
+    [self refreshFujinet:YES];
+}
+
+- (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)item
+{
+    (void)tabView;
+    (void)item;
+    if ([self currentTab] == TAB_FUJINET)
+        [self refreshFujinet:NO];
+}
+
 - (void)refreshAll
 {
     if (!_dbg)
@@ -491,12 +705,19 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     [self renderDisasm];
     [self renderMem];
     [self renderVideo];
+    if ([self currentTab] == TAB_FUJINET)
+        [self refreshFujinet:NO];
 }
 
+/* The FujiNet tab is live too: twice a second while it shows. */
 - (void)onTick
 {
     if (_dbg && !apple2debug_is_paused(_dbg))
         [self renderRegs];
+    if ([self currentTab] == TAB_FUJINET && ++_ticks >= 5) {
+        _ticks = 0;
+        [self refreshFujinet:NO];
+    }
 }
 
 /* ---- actions ------------------------------------------------------------- */

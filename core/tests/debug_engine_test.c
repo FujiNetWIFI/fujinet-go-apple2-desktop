@@ -176,6 +176,18 @@ int main(void)
         apple2debug_write_mem(d, 0x0320, saved, 4);
     }
 
+    /* ---- FujiNet is off here: nothing traced, no link -------------------- */
+    {
+        apple2_fuji_packet p[4];
+        char st[2048];
+        CHECK(apple2debug_fujinet_trace(d, p, 4) == 0,
+              "FujiNet trace has packets with FujiNet off");
+        CHECK(apple2debug_fujinet_state(d, st, (int)sizeof st) > 0 &&
+                  strstr(st, "Link       not connected") != NULL,
+              "FujiNet state text: %s", st);
+        CHECK(!apple2session_fujinet_link(s), "a link with FujiNet off");
+    }
+
     /* ---- resume: the machine must run again ------------------------------ */
     apple2debug_get_regs(d, &r);
     apple2debug_resume(d);

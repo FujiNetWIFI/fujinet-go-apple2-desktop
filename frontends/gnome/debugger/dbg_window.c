@@ -1,6 +1,8 @@
 /*
- * The GNOME frontend's debugger window: run control, 6502 registers,
- * disassembly with click-to-toggle breakpoints, and a memory view.
+ * The GNOME frontend's debugger window: run control, and two tabs. CPU has
+ * the 6502 registers, disassembly with click-to-toggle breakpoints, a memory
+ * view and a video page; FujiNet has the SmartPort packets the card and
+ * FujiNet exchange, both ways, and the card's state.
  *
  * All the machine state comes from the shared engine (core/debugger), which
  * owns the rule that only the emulator thread touches AppleWin. This file is
@@ -25,6 +27,13 @@
 #define DISASM_LINES 24
 #define MEM_ROWS     16
 #define MEM_COLS     16
+#define TRACE_MAX    512
+
+enum { TAB_CPU, TAB_FUJINET, TAB_COUNT };
+
+/* APPLE2_DEBUGGER_TAB takes a page number or the start of a name. */
+static const char *const k_tab_names[TAB_COUNT] = { "cpu", "fujinet" };
+static const char *const k_tab_labels[TAB_COUNT] = { "CPU", "FujiNet" };
 
 typedef struct {
     GtkWindow *win;
@@ -44,6 +53,14 @@ typedef struct {
     uint16_t disasm_at;   /* address the listing currently starts at */
     uint16_t mem_at;
     int follow_pc;        /* re-centre the listing on PC when it stops */
+
+    GtkNotebook *notebook;
+    GtkLabel *fuji_note;
+    GtkTextView *fuji_text;
+    GtkTextView *card_text;
+    int fuji_count;       /* what the log shows: rebuilt only on a change */
+    uint64_t fuji_last;
+    guint timer;
 } DbgWindow;
 
 static DbgWindow *g_dbg; /* one window per process */
@@ -56,6 +73,96 @@ static DbgWindow *g_dbg; /* one window per process */
 #else
 #define APPLE2_GDK_FORMAT GDK_MEMORY_B8G8R8X8
 #endif
+
+/* ---- text views ---------------------------------------------------------- */
+
+/* Engine text for a text buffer: valid UTF-8, control bytes dropped. */
+static char *clean_text(const char *text)
+{
+    char *v = g_utf8_make_valid(text, -1), *s, *d;
+    for (s = d = v; *s; s++)
+        if ((unsigned char)*s >= 0x20 || *s == '\n' || *s == '\t') *d++ = *s;
+    *d = '\0';
+    return v;
+}
+
+static GtkAdjustment *vadj(GtkTextView *view)
+{
+    GtkWidget *parent = gtk_widget_get_parent(GTK_WIDGET(view));
+    return GTK_IS_SCROLLED_WINDOW(parent)
+        ? gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent)) : NULL;
+}
+
+static gboolean at_end(GtkAdjustment *adj)
+{
+    return gtk_adjustment_get_value(adj) + gtk_adjustment_get_page_size(adj) >=
+           gtk_adjustment_get_upper(adj) - 2.0;
+}
+
+/* The log follows its end while its reader is there. New text grows the
+ * view only once it is laid out (or its tab first shows), so the end is
+ * pinned whenever the view's height changes; whether to follow is decided
+ * as text arrives. */
+static gboolean following(GtkTextView *view)
+{
+    return GPOINTER_TO_INT(g_object_get_data(G_OBJECT(view), "follow")) != 0;
+}
+
+static void on_log_resized(GtkAdjustment *adj, gpointer view)
+{
+    if (following(view))
+        gtk_adjustment_set_value(adj, gtk_adjustment_get_upper(adj) -
+                                      gtk_adjustment_get_page_size(adj));
+}
+
+static void make_log(GtkTextView *view)
+{
+    g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(1));
+    g_signal_connect(vadj(view), "changed", G_CALLBACK(on_log_resized), view);
+}
+
+/* Before new text: follow if the reader is at the end (or never looked). */
+static void log_note_reader(GtkTextView *view)
+{
+    GtkAdjustment *adj = vadj(view);
+    g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(
+        gtk_adjustment_get_page_size(adj) <= 0.0 || at_end(adj)));
+}
+
+static void log_to_end(GtkTextView *view)
+{
+    g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(1));
+    on_log_resized(vadj(view), view);
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+static void set_text_at(GtkTextView *view, const char *text, gboolean follow)
+{
+    GtkTextBuffer *b = gtk_text_view_get_buffer(view);
+    GtkAdjustment *adj = vadj(view);
+    char *clean = clean_text(text);
+    GtkTextMark *mark;
+    GtkTextIter it;
+    int top = 0;
+
+    if (!follow && adj && gtk_adjustment_get_value(adj) > 0.0) {
+        gtk_text_view_get_line_at_y(view, &it, (int)gtk_adjustment_get_value(adj), NULL);
+        top = gtk_text_iter_get_line(&it);
+    }
+    gtk_text_buffer_set_text(b, clean, -1);
+    g_free(clean);
+    if (follow) {
+        log_to_end(view);
+        return;
+    }
+    if (top <= 0) return;
+    /* scroll_to_mark waits for the new text's layout */
+    gtk_text_buffer_get_iter_at_line(b, &it, top);
+    mark = gtk_text_buffer_create_mark(b, NULL, &it, TRUE);
+    gtk_text_view_scroll_to_mark(view, mark, 0.0, TRUE, 0.0, 0.0);
+    gtk_text_buffer_delete_mark(b, mark);
+}
 
 /* ---- rendering ----------------------------------------------------------- */
 
@@ -203,6 +310,48 @@ static void render_mem(DbgWindow *w)
     g_string_free(s, TRUE);
 }
 
+/* The note, the card's state, and the log -- rebuilt only when it changed
+ * (or on force), so a reader scrolled up stays where they are. */
+static void refresh_fujinet(DbgWindow *w, gboolean force)
+{
+    static apple2_fuji_packet p[TRACE_MAX];
+    static char card[4096];
+    const int slot = apple2session_fujinet_slot(w->session);
+    GString *t;
+    char note[200];
+    int n = apple2debug_fujinet_trace(w->dbg, p, TRACE_MAX), i;
+
+    if (!slot)
+        g_strlcpy(note, "FujiNet is off (Preferences \xe2\x96\xb8 Slots).", sizeof note);
+    else if (!apple2session_fujinet_running(w->session))
+        g_snprintf(note, sizeof note, "FujiNet's card is in slot %d, but FujiNet is not running.",
+                   slot);
+    else
+        g_snprintf(note, sizeof note, "FujiNet is on the slot %d SmartPort card%s.", slot,
+                   apple2session_fujinet_link(w->session) ? ", connected" : ", not connected");
+    gtk_label_set_text(w->fuji_note, note);
+    apple2debug_fujinet_state(w->dbg, card, sizeof card);
+    set_text_at(w->card_text, card, FALSE);
+
+    if (!force && n == w->fuji_count && (n == 0 || p[n - 1].serial == w->fuji_last))
+        return;
+    w->fuji_count = n;
+    w->fuji_last = n > 0 ? p[n - 1].serial : 0;
+    log_note_reader(w->fuji_text);
+    t = g_string_new(NULL);
+    for (i = 0; i < n; i++) {
+        int k;
+        g_string_append_printf(t, "%s%s\n     ", i ? "\n" : "", p[i].text);
+        for (k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            g_string_append_printf(t, "%02X ", p[i].data[k]);
+        if (p[i].nbytes > (int)sizeof p[i].data) g_string_append(t, "\xe2\x80\xa6");
+    }
+    if (n == 0)
+        g_string_append(t, "(no SmartPort packets since the trace was cleared)");
+    set_text_at(w->fuji_text, t->str, force || following(w->fuji_text));
+    g_string_free(t, TRUE);
+}
+
 static void refresh_all(DbgWindow *w)
 {
     const int paused = apple2debug_is_paused(w->dbg);
@@ -211,6 +360,8 @@ static void refresh_all(DbgWindow *w)
     render_disasm(w);
     render_mem(w);
     render_video(w);
+    if (gtk_notebook_get_current_page(w->notebook) == TAB_FUJINET)
+        refresh_fujinet(w, FALSE);
 }
 
 /* ---- the stop callback --------------------------------------------------- */
@@ -327,10 +478,37 @@ static gboolean on_key(GtkEventControllerKey *c, guint keyval, guint code,
     }
 }
 
+static void on_fuji_clear(GtkButton *b, gpointer user_data)
+{
+    DbgWindow *w = user_data;
+    (void)b;
+    apple2debug_fujinet_trace_clear(w->dbg);
+    refresh_fujinet(w, TRUE);
+}
+
+static void on_switch_page(GtkNotebook *nb, GtkWidget *page, guint num,
+                           gpointer user_data)
+{
+    (void)nb; (void)page;
+    if (num == TAB_FUJINET)
+        refresh_fujinet(user_data, FALSE);
+}
+
+/* The FujiNet tab is live: twice a second while it shows. */
+static gboolean on_tick(gpointer user_data)
+{
+    DbgWindow *w = user_data;
+    if (gtk_widget_get_visible(GTK_WIDGET(w->win)) &&
+        gtk_notebook_get_current_page(w->notebook) == TAB_FUJINET)
+        refresh_fujinet(w, FALSE);
+    return G_SOURCE_CONTINUE;
+}
+
 static void on_destroy(GtkWidget *widget, gpointer user_data)
 {
     DbgWindow *w = user_data;
     (void)widget;
+    if (w->timer) g_source_remove(w->timer);
     /* Leave the machine running, but stop calling into a freed window. */
     apple2debug_set_stop_callback(w->dbg, NULL, NULL);
     apple2debug_resume(w->dbg);
@@ -350,11 +528,92 @@ static GtkWidget *tool_button(const char *label, const char *tooltip,
     return b;
 }
 
+static GtkWidget *mono_view(GtkTextView **out)
+{
+    GtkWidget *scroll = gtk_scrolled_window_new();
+    GtkWidget *view = gtk_text_view_new();
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(view), TRUE);
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(view), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(view), FALSE);
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(view), 6);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), view);
+    gtk_widget_set_vexpand(scroll, TRUE);
+    gtk_widget_set_hexpand(scroll, TRUE);
+    *out = GTK_TEXT_VIEW(view);
+    return scroll;
+}
+
+static GtkWidget *title_label(const char *text)
+{
+    GtkWidget *l = gtk_label_new(text);
+    gtk_widget_add_css_class(l, "heading");
+    gtk_label_set_xalign(GTK_LABEL(l), 0);
+    return l;
+}
+
+/* The FujiNet tab: the packets on the left (a note and Clear over them),
+ * the card on the right. */
+static GtkWidget *build_fujinet(DbgWindow *w)
+{
+    GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    GtkWidget *left = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *clear = gtk_button_new_with_label("Clear");
+
+    w->fuji_note = GTK_LABEL(gtk_label_new(""));
+    gtk_widget_add_css_class(GTK_WIDGET(w->fuji_note), "dim-label");
+    gtk_label_set_wrap(w->fuji_note, TRUE);
+    gtk_label_set_xalign(w->fuji_note, 0);
+    gtk_widget_set_hexpand(GTK_WIDGET(w->fuji_note), TRUE);
+    g_signal_connect(clear, "clicked", G_CALLBACK(on_fuji_clear), w);
+    gtk_box_append(GTK_BOX(row), GTK_WIDGET(w->fuji_note));
+    gtk_box_append(GTK_BOX(row), clear);
+    gtk_box_append(GTK_BOX(left), title_label("SmartPort packets (SLIP-decoded)"));
+    gtk_box_append(GTK_BOX(left), row);
+    gtk_box_append(GTK_BOX(left), mono_view(&w->fuji_text));
+    make_log(w->fuji_text);
+
+    gtk_box_append(GTK_BOX(right), title_label("SmartPort card"));
+    gtk_box_append(GTK_BOX(right), mono_view(&w->card_text));
+
+    gtk_paned_set_start_child(GTK_PANED(paned), left);
+    gtk_paned_set_end_child(GTK_PANED(paned), right);
+    gtk_paned_set_shrink_start_child(GTK_PANED(paned), FALSE);
+    gtk_paned_set_shrink_end_child(GTK_PANED(paned), FALSE);
+    gtk_paned_set_resize_end_child(GTK_PANED(paned), FALSE);
+    gtk_widget_set_size_request(left, 620, -1);
+    gtk_widget_set_size_request(right, 320, -1);
+    gtk_widget_set_margin_top(paned, 8);
+    gtk_widget_set_margin_bottom(paned, 8);
+    gtk_widget_set_margin_start(paned, 8);
+    gtk_widget_set_margin_end(paned, 8);
+    w->fuji_count = -1;
+    return paned;
+}
+
+/* APPLE2_DEBUGGER_TAB: a page number, or the start of a tab's name. */
+static int tab_from_env(void)
+{
+    const char *tab = getenv("APPLE2_DEBUGGER_TAB");
+    char *end;
+    long n;
+    int i;
+    if (!tab || !*tab) return -1;
+    n = strtol(tab, &end, 10);
+    if (end != tab && *end == '\0')
+        return (n >= 0 && n < TAB_COUNT) ? (int)n : -1;
+    for (i = 0; i < TAB_COUNT; i++)
+        if (g_ascii_strncasecmp(tab, k_tab_names[i], strlen(tab)) == 0) return i;
+    return -1;
+}
+
 void apple2_debugger_show(GtkWindow *parent, apple2session *session)
 {
     DbgWindow *w;
     GtkWidget *header, *tbview, *split, *left, *right, *scroll, *membox;
     GtkEventController *keys;
+    int tab;
 
     if (g_dbg) {
         gtk_window_present(g_dbg->win);
@@ -478,9 +737,20 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
         gtk_paned_set_resize_end_child(GTK_PANED(split), FALSE);
     }
 
+    /* CPU is the view above as it stands; FujiNet follows it. */
+    w->notebook = GTK_NOTEBOOK(gtk_notebook_new());
+    gtk_notebook_append_page(w->notebook, split,
+                             gtk_label_new(k_tab_labels[TAB_CPU]));
+    gtk_notebook_append_page(w->notebook, build_fujinet(w),
+                             gtk_label_new(k_tab_labels[TAB_FUJINET]));
+    tab = tab_from_env();
+    if (tab >= 0) gtk_notebook_set_current_page(w->notebook, tab);
+    g_signal_connect(w->notebook, "switch-page", G_CALLBACK(on_switch_page), w);
+
     tbview = adw_toolbar_view_new();
     adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(tbview), header);
-    adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(tbview), split);
+    adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(tbview),
+                                 GTK_WIDGET(w->notebook));
     adw_window_set_content(ADW_WINDOW(w->win), tbview);
 
     keys = gtk_event_controller_key_new();
@@ -506,6 +776,7 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
     }
     apple2debug_pause(w->dbg);
     refresh_all(w);
+    w->timer = g_timeout_add(500, on_tick, w);
 
     gtk_window_present(w->win);
 }

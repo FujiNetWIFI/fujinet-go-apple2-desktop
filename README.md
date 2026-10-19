@@ -117,6 +117,13 @@ video pane decodes a text, lo-res or hi-res **page** — which is not the same
 as what the machine is displaying, and is the point: it shows the buffer a
 program is drawing into before it flips to it.
 
+The debugger's **FujiNet** tab shows every SmartPort packet between the
+Apple II's card and FujiNet, both ways, with hex: each request, its reply
+(or its timeout), and the device names learned from DIB replies. It records
+from the moment the session starts, so it also holds what happened before the
+window was opened. Identical exchanges in a row fold into one line with a
+count.
+
 ## Diagnostics
 
 | Variable | Effect |
@@ -125,6 +132,7 @@ program is drawing into before it flips to it.
 | `APPLE2_ROM_DIR` | where a `WITH_APPLE_ROMS=OFF` build reads system ROMs |
 | `APPLE2_OPEN_DEBUGGER=1` | open the debugger window at launch |
 | `APPLE2_DEBUGGER_VIEW=N` | open the debugger on video page N (0 = text page 1, 4 = hi-res page 1) |
+| `APPLE2_DEBUGGER_TAB` | open the debugger on a tab: a number, or the start of its name (`cpu`, `fujinet`) |
 | `FUJINET_LIB` | explicit path to `libfujinet.so`/`.dylib`/`.dll` |
 | `FUJINET_WEBUI_BIND` | override the web admin bind address (default `127.0.0.1`) |
 

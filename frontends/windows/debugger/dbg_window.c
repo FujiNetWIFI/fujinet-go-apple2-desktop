@@ -1,8 +1,10 @@
 /*
- * Debugger window (Win32): run control, 6502 registers, disassembly with
- * click-to-toggle breakpoints, and a memory view -- the same shape as the
- * GNOME and KDE debuggers, over the same shared engine (core/debugger), built
- * from plain common controls.
+ * Debugger window (Win32): run control, and two tabs. CPU has the 6502
+ * registers, disassembly with click-to-toggle breakpoints, a memory view and
+ * a video page; FujiNet has the SmartPort packets the card and FujiNet
+ * exchange, both ways, and the card's state -- the same shape as the GNOME
+ * and KDE debuggers, over the same shared engine (core/debugger), built from
+ * plain common controls.
  *
  * The engine's rule is that only the emulator thread touches AppleWin, and
  * its stop callback therefore FIRES ON THE EMULATOR THREAD. It is handed to
@@ -19,6 +21,7 @@
 #include "dbg_window.h"
 
 #include <commctrl.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +37,7 @@
  * useful. */
 #define MEM_COLS 16
 #define MEM_ROWS 24
+#define TRACE_MAX 512
 
 #define WM_DBG_STOPPED (WM_APP + 1) /* wp: reason, lp: pc */
 #define WM_DBG_ACCEPT  (WM_APP + 2) /* wp: control id -- Enter in an edit */
@@ -45,8 +49,16 @@ enum {
     IDC_STATUS, IDC_DISASM, IDC_REGS, IDC_REG_LABEL,
     IDC_MEM_LABEL, IDC_MEM_ADDR, IDC_MEM_VIEW,
     IDC_VIEW_PICK, IDC_VIEW_PIC,
+    IDC_TABS, IDC_FUJI_TITLE, IDC_FUJI_NOTE, IDC_FUJI_CLEAR, IDC_FUJI_TEXT,
+    IDC_CARD_TITLE, IDC_CARD_TEXT,
     IDC_LABEL_FIRST /* statics that only carry text */
 };
+
+enum { TAB_CPU, TAB_FUJINET, TAB_COUNT };
+
+/* APPLE2_DEBUGGER_TAB takes a page number or the start of a name. */
+static const char *const k_tab_names[TAB_COUNT] = { "cpu", "fujinet" };
+static const char *const k_tab_labels[TAB_COUNT] = { "CPU", "FujiNet" };
 
 typedef struct {
     HWND hwnd;
@@ -57,7 +69,15 @@ typedef struct {
     HWND view_pick, view_pic;
     uint32_t *view_fb;
 
+    HWND tabs;
+    HWND fuji_title, fuji_note, fuji_clear, fuji_text, card_title, card_text;
+    int page;
+    int fuji_count;     /* what the log shows: rebuilt only on a change */
+    uint64_t fuji_last;
+    int ticks;
+
     HFONT mono;
+    int mono_h;
     HACCEL accel;
 
     apple2session *session;
@@ -134,6 +154,86 @@ static void render_video(debugger *d)
                                 d->view_fb) != 0)
         return;
     InvalidateRect(d->view_pic, NULL, FALSE);
+}
+
+/* ---- text views ---------------------------------------------------------- */
+
+/* A label set only when it changed (no flicker on the live refresh). */
+static void set_label(HWND h, const char *utf8)
+{
+    wchar_t cur[512], w[512];
+    if (!MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, 512)) w[0] = 0;
+    GetWindowTextW(h, cur, 512);
+    if (wcscmp(cur, w) != 0) SetWindowTextW(h, w);
+}
+
+/* EDIT controls want CR LF and draw control characters as boxes: engine
+ * text (UTF-8) as the wide text a view shows. */
+static wchar_t *wide_view_text(const char *text)
+{
+    size_t n = strlen(text), i, o = 0;
+    char *buf = malloc(n * 2 + 1);
+    wchar_t *w = NULL;
+    int wn;
+    if (!buf) return NULL;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '\n') { buf[o++] = '\r'; buf[o++] = '\n'; }
+        else if (c >= 0x20 || c == '\t') buf[o++] = (char)c;
+    }
+    buf[o] = '\0';
+    wn = MultiByteToWideChar(CP_UTF8, 0, buf, -1, NULL, 0);
+    if (wn > 0 && (w = malloc((size_t)wn * sizeof *w)) != NULL)
+        MultiByteToWideChar(CP_UTF8, 0, buf, -1, w, wn);
+    free(buf);
+    return w;
+}
+
+static size_t addf(char *s, size_t len, size_t cap, const char *fmt, ...)
+{
+    va_list ap;
+    int n;
+    if (len >= cap) return len;
+    va_start(ap, fmt);
+    n = vsnprintf(s + len, cap - len, fmt, ap);
+    va_end(ap);
+    if (n < 0) return len;
+    return len + (size_t)n < cap ? len + (size_t)n : cap - 1;
+}
+
+/* The rows an EDIT view shows. */
+static int edit_rows(debugger *d, HWND h)
+{
+    RECT c;
+    GetClientRect(h, &c);
+    return d->mono_h > 0 && c.bottom > d->mono_h ? c.bottom / d->mono_h : 1;
+}
+
+/* The log follows its end while its reader is there. */
+static int edit_at_end(debugger *d, HWND h)
+{
+    const int first = (int)SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0);
+    const int count = (int)SendMessageW(h, EM_GETLINECOUNT, 0, 0);
+    return first + edit_rows(d, h) >= count;
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+static void set_text_at(HWND h, const char *text, int follow)
+{
+    const int first = (int)SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0);
+    wchar_t *w = wide_view_text(text);
+    if (!w) return;
+    SendMessageW(h, WM_SETREDRAW, FALSE, 0);
+    SetWindowTextW(h, w);
+    if (follow)
+        SendMessageW(h, EM_LINESCROLL, 0, SendMessageW(h, EM_GETLINECOUNT, 0, 0));
+    else
+        SendMessageW(h, EM_LINESCROLL, 0,
+                     first - (int)SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0));
+    SendMessageW(h, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(h, NULL, TRUE);
+    free(w);
 }
 
 /* ---- rendering ----------------------------------------------------------- */
@@ -235,6 +335,53 @@ static void render_mem(debugger *d)
     SetWindowTextA(d->mem_view, text);
 }
 
+/* The note, the card's state, and the log -- rebuilt only when it changed
+ * (or on force), so a reader scrolled up stays where they are. */
+static void refresh_fujinet(debugger *d, int force)
+{
+    static apple2_fuji_packet p[TRACE_MAX];
+    static char t[TRACE_MAX * 320 + 128];
+    static char card[4096];
+    const int slot = apple2session_fujinet_slot(d->session);
+    char note[200];
+    size_t len = 0;
+    int n, i, follow;
+
+    if (!d->dbg)
+        return;
+    n = apple2debug_fujinet_trace(d->dbg, p, TRACE_MAX);
+    if (!slot)
+        snprintf(note, sizeof note, "FujiNet is off (Preferences \xe2\x96\xb8 Slots).");
+    else if (!apple2session_fujinet_running(d->session))
+        snprintf(note, sizeof note,
+                 "FujiNet's card is in slot %d, but FujiNet is not running.", slot);
+    else
+        snprintf(note, sizeof note, "FujiNet is on the slot %d SmartPort card%s.", slot,
+                 apple2session_fujinet_link(d->session) ? ", connected" : ", not connected");
+    set_label(d->fuji_note, note);
+    card[0] = '\0';
+    apple2debug_fujinet_state(d->dbg, card, sizeof card);
+    set_text_at(d->card_text, card, 0);
+
+    if (!force && n == d->fuji_count && (n == 0 || p[n - 1].serial == d->fuji_last))
+        return;
+    follow = force || d->fuji_count < 0 || edit_at_end(d, d->fuji_text);
+    d->fuji_count = n;
+    d->fuji_last = n > 0 ? p[n - 1].serial : 0;
+    t[0] = '\0';
+    for (i = 0; i < n; i++) {
+        int k;
+        len = addf(t, len, sizeof t, "%s%s\n     ", i ? "\n" : "", p[i].text);
+        for (k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            len = addf(t, len, sizeof t, "%02X ", p[i].data[k]);
+        if (p[i].nbytes > (int)sizeof p[i].data)
+            len = addf(t, len, sizeof t, "\xe2\x80\xa6");
+    }
+    if (n == 0)
+        len = addf(t, len, sizeof t, "(no SmartPort packets since the trace was cleared)");
+    set_text_at(d->fuji_text, t, follow);
+}
+
 static void refresh_all(debugger *d)
 {
     if (!d->dbg)
@@ -245,6 +392,8 @@ static void refresh_all(debugger *d)
     render_disasm(d);
     render_mem(d);
     render_video(d);
+    if (d->page == TAB_FUJINET)
+        refresh_fujinet(d, 0);
 }
 
 /* ---- actions ------------------------------------------------------------- */
@@ -373,7 +522,18 @@ static HWND mono_view(debugger *d, int id, DWORD extra)
 
 static void build_controls(debugger *d)
 {
+    TCITEMA item;
     int i;
+
+    /* The tab strip: CPU is the view below as it stands; FujiNet follows. */
+    d->tabs = child(d, WC_TABCONTROLA, "", WS_CLIPSIBLINGS | WS_TABSTOP,
+                    IDC_TABS);
+    memset(&item, 0, sizeof item);
+    item.mask = TCIF_TEXT;
+    for (i = 0; i < TAB_COUNT; i++) {
+        item.pszText = (char *)k_tab_labels[i];
+        SendMessageA(d->tabs, TCM_INSERTITEMA, (WPARAM)i, (LPARAM)&item);
+    }
 
     d->pause_btn = child(d, "BUTTON", "Pause", BS_PUSHBUTTON, IDC_PAUSE);
     d->step_in = child(d, "BUTTON", "Into (F7)", BS_PUSHBUTTON, IDC_STEP_IN);
@@ -414,11 +574,56 @@ static void build_controls(debugger *d)
                                     sizeof(uint32_t));
     d->view_pic = child(d, "Apple2DbgPixels", "", 0, IDC_VIEW_PIC);
     SetWindowLongPtrA(d->view_pic, GWLP_USERDATA, (LONG_PTR)d);
+
+    /* FujiNet */
+    d->fuji_title = child(d, "STATIC", "SmartPort packets (SLIP-decoded)",
+                          SS_LEFT | SS_NOPREFIX, IDC_FUJI_TITLE);
+    d->fuji_note = child(d, "STATIC", "", SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS,
+                         IDC_FUJI_NOTE);
+    d->fuji_clear = child(d, "BUTTON", "Clear", BS_PUSHBUTTON, IDC_FUJI_CLEAR);
+    d->fuji_text = mono_view(d, IDC_FUJI_TEXT, WS_VSCROLL | WS_HSCROLL |
+                                               ES_AUTOVSCROLL | ES_AUTOHSCROLL);
+    SendMessageA(d->fuji_text, EM_SETLIMITTEXT, 0, 0);
+    d->card_title = child(d, "STATIC", "SmartPort card", SS_LEFT | SS_NOPREFIX,
+                          IDC_CARD_TITLE);
+    d->card_text = mono_view(d, IDC_CARD_TEXT, WS_VSCROLL | WS_HSCROLL |
+                                               ES_AUTOVSCROLL | ES_AUTOHSCROLL);
+    d->fuji_count = -1;
+}
+
+static void show_page(debugger *d, int page)
+{
+    HWND cpu[] = { d->disasm, d->reg_label, d->regs, d->mem_label, d->mem_addr,
+                   d->mem_view, d->view_pick, d->view_pic };
+    HWND fuji[] = { d->fuji_title, d->fuji_note, d->fuji_clear, d->fuji_text,
+                    d->card_title, d->card_text };
+    size_t i;
+    d->page = page;
+    for (i = 0; i < sizeof cpu / sizeof cpu[0]; i++)
+        ShowWindow(cpu[i], page == TAB_CPU ? SW_SHOW : SW_HIDE);
+    for (i = 0; i < sizeof fuji / sizeof fuji[0]; i++)
+        ShowWindow(fuji[i], page == TAB_FUJINET ? SW_SHOW : SW_HIDE);
+}
+
+/* APPLE2_DEBUGGER_TAB: a page number, or the start of a tab's name. */
+static int tab_from_env(void)
+{
+    const char *tab = getenv("APPLE2_DEBUGGER_TAB");
+    char *end;
+    long n;
+    int i;
+    if (!tab || !*tab) return -1;
+    n = strtol(tab, &end, 10);
+    if (end != tab && *end == '\0')
+        return (n >= 0 && n < TAB_COUNT) ? (int)n : -1;
+    for (i = 0; i < TAB_COUNT; i++)
+        if (_strnicmp(tab, k_tab_names[i], strlen(tab)) == 0) return i;
+    return -1;
 }
 
 static void layout(debugger *d)
 {
-    RECT client;
+    RECT client, strip;
     int y = 8, bx = 8;
     int left_w, rx, rw, ry, body_y, body_h;
 
@@ -430,10 +635,31 @@ static void layout(debugger *d)
     MoveWindow(d->step_out, bx, y, 130, 26, TRUE);       bx += 138;
     MoveWindow(d->status, bx, y + 5, client.right - bx - 8, 20, TRUE);
 
-    body_y = 44;
+    /* The tab control is the strip alone: the pages sit on the window's own
+     * background below it. */
+    SetRect(&strip, 0, 0, 400, 400);
+    SendMessageA(d->tabs, TCM_ADJUSTRECT, FALSE, (LPARAM)&strip);
+    MoveWindow(d->tabs, 8, 40, client.right - 16, strip.top, TRUE);
+
+    body_y = 40 + strip.top + 6;
     body_h = client.bottom - body_y - 8;
     if (body_h < 100)
         body_h = 100;
+
+    /* FujiNet: the packets left (a note and Clear over them), the card
+     * right. */
+    {
+        const int cw = client.right - 16;
+        const int fw = cw / 3 > 320 ? 320 : cw / 3 > 220 ? cw / 3 : 220;
+        const int lw = cw - fw - 12;
+        MoveWindow(d->fuji_title, 8, body_y, lw, 18, TRUE);
+        MoveWindow(d->fuji_clear, 8 + lw - 80, body_y + 22, 80, 26, TRUE);
+        MoveWindow(d->fuji_note, 8, body_y + 27, lw - 88, 18, TRUE);
+        MoveWindow(d->fuji_text, 8, body_y + 54, lw, body_h - 54, TRUE);
+        MoveWindow(d->card_title, 8 + lw + 12, body_y, fw, 18, TRUE);
+        MoveWindow(d->card_text, 8 + lw + 12, body_y + 22, fw, body_h - 22,
+                   TRUE);
+    }
 
     /* Disassembly on the left, registers and memory stacked on the right --
      * the same split the GNOME and KDE windows use. */
@@ -491,10 +717,24 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
         /* While the machine runs, keep the registers live but leave the
          * disassembly and memory alone: they would be stale before they were
-         * drawn, and re-rendering them every tick fights with scrolling. */
+         * drawn, and re-rendering them every tick fights with scrolling. The
+         * FujiNet tab is live too, twice a second while it shows. */
         if (wp == TIMER_REFRESH && d->dbg && !apple2debug_is_paused(d->dbg))
             render_regs(d);
+        if (wp == TIMER_REFRESH && d->page == TAB_FUJINET && ++d->ticks >= 5) {
+            d->ticks = 0;
+            refresh_fujinet(d, 0);
+        }
         return 0;
+    case WM_NOTIFY: {
+        const NMHDR *nh = (const NMHDR *)lp;
+        if (nh->hwndFrom == d->tabs && nh->code == (UINT)TCN_SELCHANGE) {
+            show_page(d, (int)SendMessageA(d->tabs, TCM_GETCURSEL, 0, 0));
+            if (d->page == TAB_FUJINET)
+                refresh_fujinet(d, 0);
+        }
+        return 0;
+    }
     case WM_DBG_STOPPED:
         on_stopped(d, (apple2debug_stop_reason)wp, (uint16_t)lp);
         return 0;
@@ -507,6 +747,12 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_STEP_IN:   if (d->dbg) apple2debug_step_into(d->dbg); return 0;
         case IDC_STEP_OVER: if (d->dbg) apple2debug_step_over(d->dbg); return 0;
         case IDC_STEP_OUT:  if (d->dbg) apple2debug_step_out(d->dbg); return 0;
+        case IDC_FUJI_CLEAR:
+            if (d->dbg) {
+                apple2debug_fujinet_trace_clear(d->dbg);
+                refresh_fujinet(d, 1);
+            }
+            return 0;
         case IDC_VIEW_PICK:
             if (HIWORD(wp) == CBN_SELCHANGE)
                 render_video(d);
@@ -565,7 +811,7 @@ void apple2_debugger_show(HWND parent, apple2session *session)
     inst = (HINSTANCE)GetWindowLongPtrA(parent, GWLP_HINSTANCE);
 
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_STANDARD_CLASSES;
+    icc.dwICC = ICC_STANDARD_CLASSES | ICC_TAB_CLASSES;
     InitCommonControlsEx(&icc);
 
     memset(&wc, 0, sizeof(wc));
@@ -605,6 +851,17 @@ void apple2_debugger_show(HWND parent, apple2session *session)
                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                           CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
                           FIXED_PITCH | FF_MODERN, "Consolas");
+    /* The monospace row height, for following the end of the log. */
+    {
+        HDC dc = GetDC(d->hwnd);
+        HGDIOBJ prev = SelectObject(dc, d->mono);
+        TEXTMETRICA tm;
+        d->mono_h = 14;
+        if (GetTextMetricsA(dc, &tm))
+            d->mono_h = tm.tmHeight;
+        SelectObject(dc, prev);
+        ReleaseDC(d->hwnd, dc);
+    }
 
     build_controls(d);
 
@@ -637,6 +894,13 @@ void apple2_debugger_show(HWND parent, apple2session *session)
             if (idx >= 0 && idx < APPLE2VIEW_COUNT)
                 SendMessageA(d->view_pick, CB_SETCURSEL, (WPARAM)idx, 0);
         }
+    }
+
+    {
+        const int tab = tab_from_env();
+        d->page = tab >= 0 ? tab : TAB_CPU;
+        SendMessageA(d->tabs, TCM_SETCURSEL, (WPARAM)d->page, 0);
+        show_page(d, d->page);
     }
 
     SetTimer(d->hwnd, TIMER_REFRESH, 100, NULL);

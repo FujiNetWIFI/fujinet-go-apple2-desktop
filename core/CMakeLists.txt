@@ -191,6 +191,7 @@ add_library(apple2session STATIC
   src/fujinet_runtime.c
   debugger/m6502dasm.c
   debugger/debugger.c
+  debugger/sptrace.c
   debugger/a2video.c
 )
 
@@ -262,8 +263,13 @@ add_executable(dasm_test tests/dasm_test.c)
 target_link_libraries(dasm_test apple2session)
 target_include_directories(dasm_test PRIVATE debugger)
 
+add_executable(sptrace_test tests/sptrace_test.c)
+target_link_libraries(sptrace_test apple2session)
+target_include_directories(sptrace_test PRIVATE debugger)
+
 add_test(NAME input COMMAND input_test)
 add_test(NAME dasm COMMAND dasm_test)
+add_test(NAME sptrace COMMAND sptrace_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME debug_seam COMMAND debug_seam_test)
 add_test(NAME debug_engine COMMAND debug_engine_test)

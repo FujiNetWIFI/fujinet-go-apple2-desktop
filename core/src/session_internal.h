@@ -108,6 +108,9 @@ struct apple2session {
     /* ---- debugger ---- */
     apple2debug *debugger;
     volatile int dbg_engaged; /* emulator loop runs the stepped path */
+    /* The FujiNet trace: from session creation, not from the debugger's,
+     * so it holds what happened before anyone looked. */
+    struct sptrace *sptrace;
 
     char last_error[512];
 };

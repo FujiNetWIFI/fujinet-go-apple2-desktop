@@ -193,6 +193,11 @@ int  apple2session_render_audio(apple2session *s, int16_t *out, int nsamples);
 
 /* ---- FujiNet -------------------------------------------------------------*/
 int         apple2session_fujinet_running(const apple2session *s);
+/* FujiNet has registered its SmartPort devices with the card (the SLIP link
+ * is up). */
+int         apple2session_fujinet_link(const apple2session *s);
+/* The slot the FujiNet SmartPort card is in (7 or 5), or 0 for none. */
+int         apple2session_fujinet_slot(const apple2session *s);
 const char *apple2session_fujinet_webui_url(const apple2session *s);
 /* Copies the most recent FujiNet console output (NUL-terminated) into dst;
  * returns the number of bytes written (excluding the NUL). */

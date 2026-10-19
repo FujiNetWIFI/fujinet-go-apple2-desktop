@@ -25,6 +25,7 @@
 #include "apple2debug.h"
 #include "compat.h"
 #include "session_internal.h"
+#include "sptrace.h"
 
 /* Core options are registered by AppleWin's retroregistry.cpp under this
  * prefix ("applewin_machine", "applewin_slot7", ...). */
@@ -231,6 +232,14 @@ static void on_core_frame(const uint32_t *px, int w, int h, void *user)
     pthread_mutex_unlock(&s->frame_mtx);
 }
 
+/* The SmartPort card's packets, for the debugger's FujiNet tab. Called on the
+ * emulator thread and on the Listener's; sptrace locks. */
+static void on_sp_packet(int kind, uint8_t seq, const uint8_t *buf,
+                         size_t len, void *user)
+{
+    sptrace_feed(((apple2session *)user)->sptrace, kind, seq, buf, len);
+}
+
 int apple2session_copy_frame(apple2session *s, uint32_t *dst,
                              uint64_t *serial_inout, int *w_out, int *h_out)
 {
@@ -280,6 +289,9 @@ static void *emu_thread_main(void *arg)
 
     apple2host_set_log_sink(core_log_sink, s);
     apple2host_set_frame_sink(on_core_frame, s);
+    /* Before the core starts: inserting the card starts its Listener, whose
+     * INIT scan is the first thing FujiNet sees. */
+    apple2host_set_sp_trace(on_sp_packet, s);
 
     {
         int ok = apple2host_core_start();
@@ -399,12 +411,16 @@ apple2session *apple2session_new(const apple2session_paths *paths)
 
     /* ~1MB, so heap rather than inline in the struct. */
     s->frame = calloc(APPLE2_FB_MAX_PIXELS, sizeof(uint32_t));
-    if (!s->frame) {
+    s->sptrace = sptrace_new();
+    if (!s->frame || !s->sptrace) {
+        sptrace_free(s->sptrace);
+        free(s->frame);
         free(s);
         return NULL;
     }
 
     if (paths_init(s, paths) != 0) {
+        sptrace_free(s->sptrace);
         free(s->frame);
         free(s);
         return NULL;
@@ -428,6 +444,7 @@ void apple2session_free(apple2session *s)
     apple2session_settings_flush(s);
     settings_free_all(s);
     apple2debug_destroy(s->debugger);
+    sptrace_free(s->sptrace);
     pthread_mutex_destroy(&s->lifecycle_mtx);
     pthread_mutex_destroy(&s->frame_mtx);
     pthread_mutex_destroy(&s->vs_mtx);
@@ -566,6 +583,7 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
              * set by the thread itself. */
             s->stop_flag = 1;
             pthread_join(s->emu_thread, NULL);
+            apple2host_set_sp_trace(NULL, NULL);
             s->emu_thread_started = 0;
             s->running = 0;
             if (!s->last_error[0])
@@ -624,6 +642,9 @@ void apple2session_stop(apple2session *s)
     audio_stop(s);
     gamepad_stop(s);
     fujinet_stop(s);
+    /* The Listener outlives the core (a process-wide singleton): nothing it
+     * does may reach a session that is going away. */
+    apple2host_set_sp_trace(NULL, NULL);
     apple2host_audio_set_active(1);
     s->running = 0;
     pthread_mutex_unlock(&s->lifecycle_mtx);
@@ -727,6 +748,19 @@ const char *apple2session_fujinet_webui_url(const apple2session *s)
 int apple2session_fujinet_running(const apple2session *s)
 {
     return s->fujinet_running;
+}
+
+int apple2session_fujinet_link(const apple2session *s)
+{
+    return s->running && s->fujinet_running &&
+           apple2host_fujinet_devices() > 0;
+}
+
+int apple2session_fujinet_slot(const apple2session *s)
+{
+    if (strcmp(s->opt_slot7, "FujiNet") == 0) return 7;
+    if (strcmp(s->opt_slot5, "FujiNet") == 0) return 5;
+    return 0;
 }
 
 int apple2session_fujinet_copy_log(apple2session *s, char *dst, int max)

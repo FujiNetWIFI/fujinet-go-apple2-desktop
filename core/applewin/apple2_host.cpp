@@ -9,6 +9,7 @@
 #include "apple2_host.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdarg>
@@ -40,6 +41,14 @@
 //   ResetMachineState() : power-cycle (Ctrl-OpenApple-Reset)
 void CtrlReset();
 void ResetMachineState();
+
+// The FujiNet trace hook and the Listener's device count, defined in the
+// staged Requestor.cpp (patch 16 in tools/applewin/patch-staged-tree.py).
+// They cannot live here: Listener.h compiles only under slip.cmake's
+// directory-scoped SLIP defines, which this file does not get.
+extern "C" void (*fngo_sp_trace_hook)(int kind, uint8_t seq,
+                                      const uint8_t* buf, size_t len);
+extern "C" int fngo_sp_device_count(void);
 
 namespace {
 
@@ -105,6 +114,19 @@ int16_t g_axes[kMaxPorts][4] = {};       // [analog index*2 + x/y]
 
 // --- keyboard ---------------------------------------------------------------
 retro_keyboard_event_t g_keyboard_cb = nullptr;
+
+// --- FujiNet trace ------------------------------------------------------------
+// The sink is called from two threads (see apple2_host.h), and swapped under
+// the same lock, so clearing it means it is never called again.
+std::mutex g_sp_mutex;
+Apple2SpTraceSink g_sp_sink = nullptr;
+void* g_sp_user = nullptr;
+std::atomic<int> g_sp_devices{0};
+
+void sp_trace(int kind, uint8_t seq, const uint8_t* buf, size_t len) {
+    std::lock_guard<std::mutex> lock(g_sp_mutex);
+    if (g_sp_sink) g_sp_sink(kind, seq, buf, len, g_sp_user);
+}
 
 void RETRO_CALLCONV host_log(enum retro_log_level level, const char* fmt, ...) {
     int mapped = 1;
@@ -338,11 +360,16 @@ int apple2host_core_start(void) {
     return 1;
 }
 
-void apple2host_core_run_frame(void) { retro_run(); }
+void apple2host_core_run_frame(void) {
+    retro_run();
+    // The Listener's map is the card's to read, on this thread.
+    g_sp_devices = fngo_sp_device_count();
+}
 
 void apple2host_core_stop(void) {
     retro_unload_game();
     retro_deinit();
+    g_sp_devices = 0;
     // Drop the core's keyboard callback: it points into core state that
     // retro_deinit has just torn down, so a key injected before the next
     // core_start re-registers it would jump through a stale pointer. Cleared
@@ -357,6 +384,18 @@ void apple2host_core_stop(void) {
 
 void apple2host_ctrl_reset(void) { CtrlReset(); }
 void apple2host_power_cycle(void) { ResetMachineState(); }
+
+// --- FujiNet trace seam -----------------------------------------------------
+
+void apple2host_set_sp_trace(Apple2SpTraceSink sink, void* user) {
+    std::lock_guard<std::mutex> lock(g_sp_mutex);
+    g_sp_sink = sink;
+    g_sp_user = user;
+    // Installed once and left: the Listener thread may be reading it.
+    if (fngo_sp_trace_hook != sp_trace) fngo_sp_trace_hook = sp_trace;
+}
+
+int apple2host_fujinet_devices(void) { return g_sp_devices; }
 
 // --- debugger seam ----------------------------------------------------------
 

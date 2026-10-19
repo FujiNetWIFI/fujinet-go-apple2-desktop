@@ -337,6 +337,55 @@ def apply_all(root):
         ),
     ])
 
+    # -- 16: the debugger's FujiNet trace ------------------------------------
+    # Every request the card sends over SLIP, and its reply (or the timeout),
+    # goes to a hook the debugger's FujiNet tab records. send_request runs on
+    # the emulator thread (the card) and on the Listener thread (its INIT scan
+    # when FujiNet connects), so whatever the hook calls must lock.
+    #
+    # The hook and the device count are defined HERE because Listener.h only
+    # compiles with slip.cmake's DEV_RELAY_SLIP / SLIP_PROTOCOL_NET, which are
+    # directory-scoped to the staged source/ tree. core/applewin/apple2_host.cpp
+    # only declares them.
+    patch(root, "source/devrelay/service/Requestor.cpp", [
+        (
+            "uint8_t Requestor::request_number_ = 0;\n",
+            "uint8_t Requestor::request_number_ = 0;\n"
+            "\n"
+            "// [fujinet-go-apple2-desktop] The debugger's FujiNet trace (kind 0 a\n"
+            "// request, 1 its reply, 2 no reply in time) and the device count for its\n"
+            "// link status. See core/applewin/apple2_host.cpp.\n"
+            "extern \"C\" {\n"
+            "void (*fngo_sp_trace_hook)(int kind, uint8_t seq, const uint8_t *buf, size_t len) = nullptr;\n"
+            "int fngo_sp_device_count(void) { return GetCommandListener().get_total_device_count(); }\n"
+            "}\n",
+        ),
+        (
+            "\t// Send the serialized request\n"
+            "\tconnection->send_data(request.serialize());\n",
+            "\t// Send the serialized request\n"
+            "\tconst std::vector<uint8_t> request_data = request.serialize();\n"
+            "\tif (fngo_sp_trace_hook && !request_data.empty())\n"
+            "\t\tfngo_sp_trace_hook(0, request_data[0], request_data.data(), request_data.size());\n"
+            "\tconnection->send_data(request_data);\n",
+        ),
+        (
+            "\tif (!response_data)\n"
+            "\t{\n"
+            "\t\tstd::cerr << \"Requestor::send_request timeout",
+            "\tif (fngo_sp_trace_hook)\n"
+            "\t{\n"
+            "\t\tif (response_data)\n"
+            "\t\t\tfngo_sp_trace_hook(1, request.get_request_sequence_number(), response_data->data(), response_data->size());\n"
+            "\t\telse\n"
+            "\t\t\tfngo_sp_trace_hook(2, request.get_request_sequence_number(), nullptr, 0);\n"
+            "\t}\n"
+            "\tif (!response_data)\n"
+            "\t{\n"
+            "\t\tstd::cerr << \"Requestor::send_request timeout",
+        ),
+    ])
+
 
 def main():
     # cmake/StageAppleWin.cmake hashes this file into .source-info (with

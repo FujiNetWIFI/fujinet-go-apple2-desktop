@@ -10,7 +10,10 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QTabWidget>
+#include <QTimer>
 
 #include <vector>
 
@@ -40,6 +43,8 @@ private:
     void renderVideo();
     void refreshAll();
     void toggleRun();
+    QWidget *buildFujinet();
+    void refreshFujinet(bool force);
 
     apple2session *m_session;
     apple2debug *m_dbg;
@@ -57,4 +62,12 @@ private:
     quint16 m_disasmAt = 0;
     quint16 m_memAt = 0x0400;
     bool m_followPc = true;
+
+    QTabWidget *m_tabs = nullptr;
+    QLabel *m_fujiNote = nullptr;
+    QPlainTextEdit *m_fujiText = nullptr;
+    QPlainTextEdit *m_cardText = nullptr;
+    int m_fujiCount = -1;   /* what the log shows: rebuilt only on a change */
+    quint64 m_fujiLast = 0;
+    QTimer *m_tick = nullptr;
 };

@@ -42,6 +42,14 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.0" date="2026-10-19">
+      <description>
+        <p>
+          Debugger: a FujiNet tab shows every SmartPort packet between the
+          Apple II and FujiNet, both ways, with hex.
+        </p>
+      </description>
+    </release>
     <release version="0.3.2" date="2026-09-02">
       <description>
         <p>

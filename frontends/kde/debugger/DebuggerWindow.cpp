@@ -1,6 +1,8 @@
 /*
- * The KDE/Qt frontend's debugger window: run control, 6502 registers,
- * disassembly with click-to-toggle breakpoints, and a memory view.
+ * The KDE/Qt frontend's debugger window: run control, and two tabs. CPU has
+ * the 6502 registers, disassembly with click-to-toggle breakpoints, a memory
+ * view and a video page; FujiNet has the SmartPort packets the card and
+ * FujiNet exchange, both ways, and the card's state.
  *
  * Same shape as the GNOME window, over the same shared engine
  * (core/debugger), which owns the rule that only the emulator thread touches
@@ -23,6 +25,7 @@
 #include <QKeyEvent>
 #include <QPointer>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QSplitter>
 #include <QStatusBar>
@@ -39,6 +42,11 @@ constexpr int kDisasmLines = 24;
  * entirely. 8 columns still shows a useful amount and halves the demand. */
 constexpr int kMemCols = 8;
 constexpr int kMemRows = 24;
+constexpr int kTraceMax = 512;
+
+enum { kTabCpu, kTabFujinet, kTabCount };
+/* APPLE2_DEBUGGER_TAB takes a page number or the start of a name. */
+const char *const kTabNames[kTabCount] = { "cpu", "fujinet" };
 
 QPointer<DebuggerWindow> g_window;
 
@@ -48,6 +56,48 @@ QFont monoFont(const QWidget *w)
     f.setFamily(QStringLiteral("monospace"));
     f.setStyleHint(QFont::TypeWriter);
     return f;
+}
+
+QLabel *titleLabel(const QString &text)
+{
+    auto *l = new QLabel(text);
+    QFont f = l->font();
+    f.setBold(true);
+    l->setFont(f);
+    return l;
+}
+
+/* Whether a view's reader is at its end (a log then follows new lines). */
+bool atEnd(QPlainTextEdit *v)
+{
+    return v->verticalScrollBar()->value() >= v->verticalScrollBar()->maximum() - 1;
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+void setText(QPlainTextEdit *v, const QString &text, bool follow = false)
+{
+    if (v->toPlainText() == text) {
+        if (follow) v->verticalScrollBar()->setValue(v->verticalScrollBar()->maximum());
+        return;
+    }
+    const int top = v->verticalScrollBar()->value(), left = v->horizontalScrollBar()->value();
+    v->setPlainText(text);
+    v->verticalScrollBar()->setValue(follow ? v->verticalScrollBar()->maximum() : top);
+    v->horizontalScrollBar()->setValue(left);
+}
+
+/* APPLE2_DEBUGGER_TAB: a page number, or the start of a tab's name. */
+int tabFromEnv()
+{
+    const QString tab = qEnvironmentVariable("APPLE2_DEBUGGER_TAB").trimmed();
+    if (tab.isEmpty()) return -1;
+    bool ok = false;
+    const int n = tab.toInt(&ok);
+    if (ok) return n >= 0 && n < kTabCount ? n : -1;
+    for (int i = 0; i < kTabCount; i++)
+        if (QLatin1String(kTabNames[i]).startsWith(tab, Qt::CaseInsensitive)) return i;
+    return -1;
 }
 
 /* EMULATOR THREAD. Does nothing but hand the event to the GUI thread. */
@@ -95,6 +145,14 @@ DebuggerWindow::DebuggerWindow(apple2session *session, QWidget *parent)
     apple2debug_pause(m_dbg);
 
     refreshAll();
+
+    /* The FujiNet tab is live: twice a second while it shows. */
+    m_tick = new QTimer(this);
+    connect(m_tick, &QTimer::timeout, this, [this] {
+        if (isVisible() && m_tabs->currentIndex() == kTabFujinet)
+            refreshFujinet(false);
+    });
+    m_tick->start(500);
 }
 
 DebuggerWindow::~DebuggerWindow()
@@ -255,7 +313,17 @@ void DebuggerWindow::buildUi()
     split->setSizes({560, 680});
     split->setStretchFactor(0, 1);
     split->setStretchFactor(1, 0);
-    setCentralWidget(split);
+
+    /* CPU is the view above as it stands; FujiNet follows it. */
+    m_tabs = new QTabWidget(this);
+    m_tabs->addTab(split, QStringLiteral("CPU"));
+    m_tabs->addTab(buildFujinet(), QStringLiteral("FujiNet"));
+    if (const int tab = tabFromEnv(); tab >= 0)
+        m_tabs->setCurrentIndex(tab);
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this](int page) {
+        if (page == kTabFujinet) refreshFujinet(false);
+    });
+    setCentralWidget(m_tabs);
 
     /* Shortcuts rather than keyPressEvent: they fire wherever focus is,
      * including inside the disassembly list. */
@@ -270,6 +338,93 @@ void DebuggerWindow::buildUi()
     connect(new QShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F8), this),
             &QShortcut::activated, this,
             [this] { if (m_dbg) apple2debug_step_out(m_dbg); });
+}
+
+/* The packets on the left (a note and Clear over them), the card on the
+ * right. */
+QWidget *DebuggerWindow::buildFujinet()
+{
+    auto mono = [this] {
+        auto *v = new QPlainTextEdit;
+        v->setReadOnly(true);
+        v->setFont(monoFont(this));
+        v->setLineWrapMode(QPlainTextEdit::NoWrap);
+        return v;
+    };
+
+    auto *split = new QSplitter(Qt::Horizontal);
+    auto *left = new QWidget;
+    auto *lv = new QVBoxLayout(left);
+    lv->addWidget(titleLabel(QStringLiteral("SmartPort packets (SLIP-decoded)")));
+    auto *row = new QHBoxLayout;
+    m_fujiNote = new QLabel;
+    m_fujiNote->setWordWrap(true);
+    m_fujiNote->setStyleSheet(QStringLiteral("color: gray;"));
+    auto *clear = new QPushButton(QStringLiteral("Clear"));
+    connect(clear, &QPushButton::clicked, this, [this] {
+        if (!m_dbg) return;
+        apple2debug_fujinet_trace_clear(m_dbg);
+        refreshFujinet(true);
+    });
+    row->addWidget(m_fujiNote, 1);
+    row->addWidget(clear);
+    lv->addLayout(row);
+    m_fujiText = mono();
+    lv->addWidget(m_fujiText, 1);
+    left->setMinimumWidth(560);
+
+    auto *right = new QWidget;
+    auto *rv = new QVBoxLayout(right);
+    rv->addWidget(titleLabel(QStringLiteral("SmartPort card")));
+    m_cardText = mono();
+    rv->addWidget(m_cardText, 1);
+    right->setMinimumWidth(320);
+    split->addWidget(left);
+    split->addWidget(right);
+    split->setStretchFactor(0, 3);
+    split->setStretchFactor(1, 2);
+    split->setChildrenCollapsible(false);
+    return split;
+}
+
+/* The note, the card's state, and the log -- rebuilt only when it changed
+ * (or on force), so a reader scrolled up stays where they are. */
+void DebuggerWindow::refreshFujinet(bool force)
+{
+    static apple2_fuji_packet p[kTraceMax];
+    static char card[4096];
+    if (!m_dbg) return;
+    const int n = apple2debug_fujinet_trace(m_dbg, p, kTraceMax);
+    const int slot = apple2session_fujinet_slot(m_session);
+
+    if (!slot)
+        m_fujiNote->setText(QStringLiteral("FujiNet is off (Preferences ▸ Slots)."));
+    else if (!apple2session_fujinet_running(m_session))
+        m_fujiNote->setText(QStringLiteral("FujiNet's card is in slot %1, but FujiNet is "
+                                           "not running.").arg(slot));
+    else
+        m_fujiNote->setText(QStringLiteral("FujiNet is on the slot %1 SmartPort card%2.")
+                                .arg(slot)
+                                .arg(apple2session_fujinet_link(m_session)
+                                         ? QStringLiteral(", connected")
+                                         : QStringLiteral(", not connected")));
+    apple2debug_fujinet_state(m_dbg, card, sizeof card);
+    setText(m_cardText, QString::fromUtf8(card));
+
+    if (!force && n == m_fujiCount && (n == 0 || p[n - 1].serial == m_fujiLast)) return;
+    m_fujiCount = n;
+    m_fujiLast = n > 0 ? p[n - 1].serial : 0;
+    QString t;
+    for (int i = 0; i < n; ++i) {
+        if (i) t += QLatin1Char('\n');
+        t += QString::fromUtf8(p[i].text);
+        t += QStringLiteral("\n     ");
+        for (int k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            t += QStringLiteral("%1 ").arg(p[i].data[k], 2, 16, QLatin1Char('0')).toUpper();
+        if (p[i].nbytes > (int)sizeof p[i].data) t += QStringLiteral("…");
+    }
+    if (n == 0) t = QStringLiteral("(no SmartPort packets since the trace was cleared)");
+    setText(m_fujiText, t, force || atEnd(m_fujiText));
 }
 
 void DebuggerWindow::renderRegs()
@@ -413,6 +568,8 @@ void DebuggerWindow::refreshAll()
     renderDisasm();
     renderMem();
     renderVideo();
+    if (m_tabs->currentIndex() == kTabFujinet)
+        refreshFujinet(false);
 }
 
 void DebuggerWindow::toggleRun()

@@ -25,6 +25,7 @@
 #include "compat.h"
 #include "m6502dasm.h"
 #include "session_internal.h"
+#include "sptrace.h"
 
 #define MAX_BREAKPOINTS 64
 #define MAX_SYMBOLS     4096
@@ -446,6 +447,51 @@ int apple2debug_disassemble(apple2debug *d, uint16_t addr, int count,
     }
     if (next_addr) *next_addr = addr;
     return count;
+}
+
+/* ---- FujiNet ----------------------------------------------------------------
+ * The trace belongs to the session (it runs from session start); these read
+ * it. The rest of the state is the card's slot and the Listener's count. */
+
+int apple2debug_fujinet_trace(apple2debug *d, apple2_fuji_packet *out, int max)
+{
+    return d ? sptrace_copy(d->s->sptrace, out, max) : 0;
+}
+
+void apple2debug_fujinet_trace_clear(apple2debug *d)
+{
+    if (d) sptrace_clear(d->s->sptrace);
+}
+
+int apple2debug_fujinet_state(apple2debug *d, char *dst, int dstsz)
+{
+    apple2session *s;
+    int slot, len;
+
+    if (!dst || dstsz <= 0) return 0;
+    dst[0] = '\0';
+    if (!d) return 0;
+    s = d->s;
+    slot = apple2session_fujinet_slot(s);
+    if (slot)
+        len = snprintf(dst, (size_t)dstsz,
+                       "Card       slot %d\n"
+                       "Listener   127.0.0.1:%d (SLIP)\n",
+                       slot, APPLE2SESSION_SLIP_PORT);
+    else
+        len = snprintf(dst, (size_t)dstsz, "Card       none\n");
+    if (len < 0 || len >= dstsz) return (int)strlen(dst);
+    len += snprintf(dst + len, (size_t)(dstsz - len),
+                    "FujiNet    %s\n"
+                    "Devices    %d registered\n"
+                    "Link       %s\n\n",
+                    apple2session_fujinet_running(s) ? "running"
+                                                     : "not running",
+                    s->running ? apple2host_fujinet_devices() : 0,
+                    apple2session_fujinet_link(s) ? "connected"
+                                                  : "not connected");
+    if (len < 0 || len >= dstsz) return (int)strlen(dst);
+    return len + sptrace_describe(s->sptrace, dst + len, dstsz - len);
 }
 
 /* ---- symbols ---------------------------------------------------------------
