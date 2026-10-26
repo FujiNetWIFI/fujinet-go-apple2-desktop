@@ -89,10 +89,16 @@ void fujinet_log_show(QWidget *parent, apple2session *session)
     auto refresh = [view, session]() {
         static char buf[128 * 1024];
         const int n = apple2session_fujinet_copy_log(session, buf, sizeof(buf));
-        view->setPlainText(n > 0 ? QString::fromUtf8(buf)
-                                 : QStringLiteral("(no FujiNet output yet)"));
-        view->verticalScrollBar()->setValue(
-            view->verticalScrollBar()->maximum());
+        const QString text = n > 0 ? QString::fromUtf8(buf)
+                                   : QStringLiteral("(no FujiNet output yet)");
+        if (text == view->toPlainText())
+            return; // unchanged: keep the scroll position and selection
+        // Follow the tail only while the reader is already at the bottom.
+        QScrollBar *bar = view->verticalScrollBar();
+        const int value = bar->value();
+        const bool atEnd = value >= bar->maximum();
+        view->setPlainText(text);
+        bar->setValue(atEnd ? bar->maximum() : value);
     };
     QObject::connect(timer, &QTimer::timeout, view, refresh);
     timer->start(1000);

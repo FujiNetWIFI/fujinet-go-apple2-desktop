@@ -42,6 +42,20 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.0" date="2026-10-25">
+      <description>
+        <p>
+          Windows: the picture is drawn with Direct3D 11 (GDI as the fallback)
+          and paced like a game, which ends the flicker; the FujiNet console
+          log shows output; the About box shows the app icon.
+        </p>
+        <p>
+          The FujiNet console log keeps its scroll position instead of jumping
+          back to the top, and follows new output only while it is at the
+          bottom.
+        </p>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-10-19">
       <description>
         <p>

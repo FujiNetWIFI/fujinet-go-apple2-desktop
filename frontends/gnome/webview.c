@@ -8,6 +8,7 @@
  */
 
 #include "webview.h"
+#include <string.h>
 
 #ifdef HAVE_WEBKIT
 #include <webkit/webkit.h>
@@ -86,13 +87,36 @@ static gboolean log_refresh(gpointer user_data)
 {
     LogState *st = user_data;
     static char buf[128 * 1024];
+    static char shown[128 * 1024];
     GtkTextBuffer *tb = gtk_text_view_get_buffer(st->view);
-    GtkTextIter end;
+    GtkAdjustment *adj =
+        gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(st->view));
     int n = apple2session_fujinet_copy_log(st->session, buf, sizeof(buf));
+    const char *text = n > 0 ? buf : "(no FujiNet output yet)";
+    double value = 0;
+    gboolean at_end = TRUE;
 
-    gtk_text_buffer_set_text(tb, n > 0 ? buf : "(no FujiNet output yet)", -1);
-    gtk_text_buffer_get_end_iter(tb, &end);
-    gtk_text_view_scroll_to_iter(st->view, &end, 0, FALSE, 0, 1.0);
+    /* Unchanged: leave the view alone (keeps the scroll position and any
+     * selection). */
+    if (strcmp(text, shown) == 0)
+        return G_SOURCE_CONTINUE;
+    g_strlcpy(shown, text, sizeof(shown));
+
+    /* Follow the tail only while the reader is already at the bottom;
+     * otherwise keep them where they were. */
+    if (adj) {
+        value = gtk_adjustment_get_value(adj);
+        at_end = value >= gtk_adjustment_get_upper(adj) -
+                              gtk_adjustment_get_page_size(adj) - 1.0;
+    }
+    gtk_text_buffer_set_text(tb, text, -1);
+    if (at_end) {
+        GtkTextIter end;
+        gtk_text_buffer_get_end_iter(tb, &end);
+        gtk_text_view_scroll_to_iter(st->view, &end, 0, FALSE, 0, 1.0);
+    } else if (adj) {
+        gtk_adjustment_set_value(adj, value);
+    }
     return G_SOURCE_CONTINUE;
 }
 

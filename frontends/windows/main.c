@@ -2,9 +2,9 @@
  * FujiNet Go Apple II -- native Win32 frontend.
  *
  * Mirrors the GTK/Qt/AppKit frontends over the shared apple2session API: a
- * GDI-blitted display letterboxed to the chosen aspect, a present thread that
- * feeds the session's vsync phase-lock from DwmFlush (the Windows analog of
- * the GTK frame clock / CVDisplayLink), full keyboard mapping, menus for the
+ * Direct3D 11 display (GDI as the fallback) letterboxed to the chosen aspect,
+ * whose render thread feeds the session's vsync phase-lock (the Windows
+ * analog of the GTK frame clock / CVDisplayLink), full keyboard mapping, menus for the
  * machine and slot options, media and ROM import, and the FujiNet
  * configuration (default browser) and console-log windows. Gamepads are
  * handled inside the core's SDL thread.
@@ -12,9 +12,8 @@
  * Two things differ from the ADAM frontend this is modelled on:
  *
  *  - the frame needs no conversion. The session hands out XRGB8888, which is
- *    byte-for-byte what a 32bpp BI_RGB DIB wants, so the present thread just
- *    copies it and StretchDIBits blits it. (ADAM's core produces RGB565 and
- *    its frontend expands every pixel by hand.)
+ *    what display.c uploads to its texture as it is. (ADAM's core produces
+ *    RGB565 and its frontend expands every pixel by hand.)
  *  - the geometry is not fixed. A VidHD card in slot 3 switches the core from
  *    560x384 to 640x400 at runtime, so the frame's own dimensions drive the
  *    letterbox rather than a compile-time constant.
@@ -25,22 +24,17 @@
 
 #include <windows.h>
 #include <commdlg.h>
-#include <dwmapi.h>
 #include <shellapi.h>
 
-#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "apple2session.h"
 #include "debugger/dbg_window.h"
+#include "display.h"
 #include "resource.h"
-
-#define FB_MAX_W APPLE2SESSION_FB_MAX_WIDTH
-#define FB_MAX_H APPLE2SESSION_FB_MAX_HEIGHT
 
 #define APP_TITLE "FujiNet Go Apple II"
 
@@ -52,16 +46,7 @@ static HWND g_log_window;
 static HWND g_log_edit;
 static HMENU g_menu;
 
-/* Frame hand-off: the present thread refreshes this under the lock, WM_PAINT
- * blits it. The pixels need no conversion (see the file comment), so the
- * buffer is exactly what StretchDIBits reads. */
-static CRITICAL_SECTION g_fb_lock;
-static uint32_t g_fb[FB_MAX_W * FB_MAX_H];
-static int g_fb_w, g_fb_h;
-static uint64_t g_serial;
-
-static pthread_t g_present_thread;
-static volatile int g_present_run;
+static HWND g_display;
 static int g_aspect_mode;
 static int g_smooth;
 static int g_scanlines;
@@ -70,107 +55,16 @@ static int g_fullscreen;
  * first field would be named, and -Wextra rightly complains about the rest. */
 static WINDOWPLACEMENT g_prev_placement;
 
-static int64_t monotonic_ns(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-}
-
-/* ---- present thread: vsync pacing + frame pickup ------------------------- */
-
-static void *present_main(void *arg)
-{
-    (void)arg;
-    while (g_present_run) {
-        BOOL composited = FALSE;
-        DwmIsCompositionEnabled(&composited);
-        if (composited && SUCCEEDED(DwmFlush())) {
-            /* DwmFlush returned at the compositor's vsync. */
-        } else {
-            Sleep(16); /* no DWM composition (RDP, safe mode): wall clock */
-        }
-        apple2session_notify_vsync(g_session, monotonic_ns());
-
-        EnterCriticalSection(&g_fb_lock);
-        {
-            int w = 0, h = 0;
-            int changed =
-                apple2session_copy_frame(g_session, g_fb, &g_serial, &w, &h);
-            if (changed) {
-                g_fb_w = w;
-                g_fb_h = h;
-            }
-            LeaveCriticalSection(&g_fb_lock);
-            if (changed)
-                InvalidateRect(g_hwnd, NULL, FALSE);
-        }
-    }
-    return NULL;
-}
-
 /* ---- display ------------------------------------------------------------- */
 
-static RECT dest_rect(int cw, int ch, int fbw, int fbh)
+/* The picture fills the client. */
+static void layout_display(void)
 {
-    double dw, dh;
-    RECT r;
-
-    if (g_aspect_mode == ASPECT_INTEGER) {
-        int scale = (int)((cw / fbw < ch / fbh) ? cw / fbw : ch / fbh);
-        if (scale < 1) scale = 1;
-        dw = (double)scale * fbw;
-        dh = (double)scale * fbh;
-    } else {
-        double aspect =
-            g_aspect_mode == ASPECT_TV43 ? 4.0 / 3.0 : (double)fbw / fbh;
-        if ((double)cw / ch > aspect) {
-            dh = ch;
-            dw = ch * aspect;
-        } else {
-            dw = cw;
-            dh = cw / aspect;
-        }
-    }
-    r.left = (LONG)((cw - dw) / 2);
-    r.top = (LONG)((ch - dh) / 2);
-    r.right = r.left + (LONG)dw;
-    r.bottom = r.top + (LONG)dh;
-    return r;
-}
-
-static void paint(HWND hwnd)
-{
-    PAINTSTRUCT ps;
-    HDC hdc = BeginPaint(hwnd, &ps);
-    RECT client;
-    BITMAPINFO bmi;
-    RECT d;
-    int fbw, fbh;
-
-    GetClientRect(hwnd, &client);
-    FillRect(hdc, &client, (HBRUSH)GetStockObject(BLACK_BRUSH));
-
-    EnterCriticalSection(&g_fb_lock);
-    fbw = g_fb_w;
-    fbh = g_fb_h;
-    if (fbw > 0 && fbh > 0 && client.right > 0 && client.bottom > 0) {
-        memset(&bmi, 0, sizeof(bmi));
-        bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
-        bmi.bmiHeader.biWidth = fbw;
-        bmi.bmiHeader.biHeight = -fbh; /* top-down */
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-
-        d = dest_rect(client.right, client.bottom, fbw, fbh);
-        SetStretchBltMode(hdc, g_smooth ? HALFTONE : COLORONCOLOR);
-        StretchDIBits(hdc, d.left, d.top, d.right - d.left, d.bottom - d.top,
-                      0, 0, fbw, fbh, g_fb, &bmi, DIB_RGB_COLORS, SRCCOPY);
-    }
-    LeaveCriticalSection(&g_fb_lock);
-
-    EndPaint(hwnd, &ps);
+    RECT rc;
+    if (!g_display)
+        return;
+    GetClientRect(g_hwnd, &rc);
+    MoveWindow(g_display, 0, 0, rc.right, rc.bottom, TRUE);
 }
 
 /* ---- keyboard ------------------------------------------------------------
@@ -291,6 +185,7 @@ static void apply_display_settings(void)
                                           ASPECT_TV43);
     g_smooth = apple2session_get_int(g_session, "smooth_scaling", 0);
     g_scanlines = apple2session_get_int(g_session, "scanlines", 1);
+    apple2_display_set_options(g_aspect_mode, g_smooth);
 }
 
 static void restart_session(void)
@@ -537,10 +432,48 @@ static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_TIMER: {
         static char buf[128 * 1024];
+        static char shown[128 * 1024];
         int n = apple2session_fujinet_copy_log(g_session, buf, sizeof(buf));
-        SetWindowTextA(g_log_edit, n > 0 ? buf : "(no FujiNet output yet)");
-        SendMessageA(g_log_edit, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-        SendMessageA(g_log_edit, EM_SCROLLCARET, 0, 0);
+        const char *text = n > 0 ? buf : "(no FujiNet output yet)";
+        LRESULT first, lines;
+        RECT rc;
+        HDC dc;
+        int visible = 1, at_end;
+
+        /* Unchanged: leave the control alone (keeps the scroll position and
+         * any selection). */
+        if (strcmp(text, shown) == 0)
+            return 0;
+        snprintf(shown, sizeof(shown), "%s", text);
+
+        /* Follow the tail only while the reader is already at the bottom;
+         * otherwise put them back on the line they were reading. */
+        first = SendMessageA(g_log_edit, EM_GETFIRSTVISIBLELINE, 0, 0);
+        lines = SendMessageA(g_log_edit, EM_GETLINECOUNT, 0, 0);
+        GetClientRect(g_log_edit, &rc);
+        dc = GetDC(g_log_edit);
+        if (dc) {
+            HGDIOBJ old = SelectObject(
+                dc, (HGDIOBJ)SendMessageA(g_log_edit, WM_GETFONT, 0, 0));
+            TEXTMETRICA tm;
+            if (GetTextMetricsA(dc, &tm) && tm.tmHeight > 0)
+                visible = (rc.bottom - rc.top) / tm.tmHeight;
+            SelectObject(dc, old);
+            ReleaseDC(g_log_edit, dc);
+        }
+        at_end = first + (visible > 0 ? visible : 1) >= lines;
+
+        SendMessageA(g_log_edit, WM_SETREDRAW, FALSE, 0);
+        SetWindowTextA(g_log_edit, text);
+        if (at_end) {
+            SendMessageA(g_log_edit, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+            SendMessageA(g_log_edit, EM_SCROLLCARET, 0, 0);
+        } else {
+            LRESULT now = SendMessageA(g_log_edit, EM_GETFIRSTVISIBLELINE, 0, 0);
+            SendMessageA(g_log_edit, EM_LINESCROLL, 0, (LPARAM)(first - now));
+        }
+        SendMessageA(g_log_edit, WM_SETREDRAW, TRUE, 0);
+        InvalidateRect(g_log_edit, NULL, TRUE);
         return 0;
     }
     case WM_CLOSE:
@@ -643,7 +576,7 @@ static void on_command(HWND hwnd, UINT cmd)
         g_aspect_mode = (int)(cmd - IDM_ASPECT_BASE);
         apple2session_set_int(g_session, "aspect_mode", g_aspect_mode);
         sync_menu_checks();
-        InvalidateRect(hwnd, NULL, FALSE);
+        apple2_display_set_options(g_aspect_mode, g_smooth);
         return;
     }
 
@@ -665,20 +598,34 @@ static void on_command(HWND hwnd, UINT cmd)
         apple2session_set_int(g_session, "smooth_scaling", g_smooth);
         restart_session();
         sync_menu_checks();
-        InvalidateRect(hwnd, NULL, FALSE);
+        apple2_display_set_options(g_aspect_mode, g_smooth);
         break;
     case IDM_FULLSCREEN: toggle_fullscreen(hwnd); break;
     case IDM_DEBUGGER:   open_debugger(); break;
-    case IDM_ABOUT:
-        MessageBoxA(hwnd,
-                    APP_TITLE " " APPLE2_VERSION_STRING "\n\n"
-                    "Self-contained Apple II with built-in FujiNet.\n"
-                    "Emulation by AppleWin; FujiNet runs in-process over\n"
-                    "SmartPort-over-SLIP.\n\n"
-                    "Copyright (C) 2026 Thomas Cherryhomes\n"
-                    "GPL-3.0-or-later -- https://fujinet.online/",
-                    "About " APP_TITLE, MB_ICONINFORMATION);
+    case IDM_ABOUT: {
+        /* MB_USERICON with the app's own icon, not a stock Windows one. */
+        MSGBOXPARAMSA mb;
+        char text[640];
+        snprintf(text, sizeof(text),
+                 APP_TITLE " " APPLE2_VERSION_STRING "\n\n"
+                 "Self-contained Apple II with built-in FujiNet.\n"
+                 "Emulation by AppleWin; FujiNet runs in-process over\n"
+                 "SmartPort-over-SLIP.\n\n"
+                 "Copyright (C) 2026 Thomas Cherryhomes\n"
+                 "GPL-3.0-or-later -- https://fujinet.online/\n\n"
+                 "Display: %s",
+                 apple2_display_renderer());
+        memset(&mb, 0, sizeof(mb));
+        mb.cbSize = sizeof(mb);
+        mb.hwndOwner = hwnd;
+        mb.hInstance = (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE);
+        mb.lpszText = text;
+        mb.lpszCaption = "About " APP_TITLE;
+        mb.dwStyle = MB_OK | MB_USERICON;
+        mb.lpszIcon = MAKEINTRESOURCEA(IDI_APPICON);
+        MessageBoxIndirectA(&mb);
         break;
+    }
     case IDM_EXIT: DestroyWindow(hwnd); break;
     }
 }
@@ -686,17 +633,10 @@ static void on_command(HWND hwnd, UINT cmd)
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
-    case WM_PAINT:
-        paint(hwnd);
-        return 0;
     case WM_ERASEBKGND:
-        return 1; /* paint() clears; avoid flicker */
+        return 1; /* the display child covers the client */
     case WM_SIZE:
-        /* A resize only invalidates the newly exposed strips, and BeginPaint
-         * clips the repaint to them -- the rest of the client area would keep
-         * the image blitted at the old size (visible as a ghost after
-         * maximize or F11). Ask for the whole client area instead. */
-        InvalidateRect(hwnd, NULL, FALSE);
+        layout_display();
         return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
@@ -738,7 +678,6 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     (void)cmd;
 
     SetProcessDPIAware();
-    InitializeCriticalSection(&g_fb_lock);
     g_prev_placement.length = sizeof(g_prev_placement);
 
     g_session = apple2session_new(NULL);
@@ -774,10 +713,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     if (!g_hwnd)
         return 1;
     sync_menu_checks();
+    apple2_display_set_options(g_aspect_mode, g_smooth);
+    g_display = apple2_display_create(g_hwnd, g_session);
+    layout_display();
     ShowWindow(g_hwnd, show);
-
-    g_present_run = 1;
-    pthread_create(&g_present_thread, NULL, present_main, NULL);
 
     /* Developer affordance, matching the other frontends: open the debugger
      * alongside the main window, which is what you want when the app dies
@@ -794,9 +733,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         DispatchMessageA(&msg);
     }
 
-    g_present_run = 0;
-    pthread_join(g_present_thread, NULL);
+    apple2_display_destroy();
     apple2session_free(g_session);
-    DeleteCriticalSection(&g_fb_lock);
     return (int)msg.wParam;
 }

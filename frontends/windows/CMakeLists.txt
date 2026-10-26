@@ -17,12 +17,15 @@ configure_file(app.manifest.in "${CMAKE_CURRENT_BINARY_DIR}/app.manifest" @ONLY)
 
 add_executable(fujinet-go-apple2-windows WIN32
   main.c
+  display.c
   debugger/dbg_window.c
   resource.rc
 )
 target_link_libraries(fujinet-go-apple2-windows PRIVATE
   apple2session
-  gdi32 user32 comdlg32 dwmapi shell32 comctl32
+  # d3d11: the picture (display.c; d3dcompiler_47 and avrt are loaded, not
+  # linked). dwmapi: DwmFlush, the GDI fallback's frame clock.
+  d3d11 gdi32 user32 comdlg32 dwmapi shell32 comctl32
 )
 # The debugger window talks to the shared engine (core/include/apple2debug.h).
 # CMAKE_CURRENT_BINARY_DIR is on the list for the RC compiler's sake: that is

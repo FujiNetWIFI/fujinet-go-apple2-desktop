@@ -103,6 +103,8 @@ int g_log_read_fd = -1;
 int g_log_write_fd = -1;
 int g_saved_stdout_fd = -1;
 int g_saved_stderr_fd = -1;
+int g_stdout_fd = STDOUT_FILENO;    /* the fds the streams write through */
+int g_stderr_fd = STDERR_FILENO;
 
 constexpr int kSamSampleRate = 22050;
 constexpr size_t kMaxQueuedSamSamples = static_cast<size_t>(kSamSampleRate * 60);
@@ -280,12 +282,35 @@ void forward_console_line(std::string line) {
     host_log("[fujinet] %s", line.c_str());
 }
 
+/* The fd a stream writes through, made redirectable. On POSIX that is just
+ * 1 or 2. A WIN32-subsystem process (the Windows app) has no console: the
+ * CRT gives fds 1 and 2 no handle and the stdout/stderr streams fd -2, so
+ * dup() failed, dup2() onto 1/2 never reached the streams, and the console
+ * log stayed empty. Pointing such a stream at NUL first gives it a real fd,
+ * which the pipe then replaces. */
+int stream_fd(FILE* stream) {
+#if defined(_WIN32)
+    const int fd = _fileno(stream);
+    const intptr_t handle = fd >= 0 ? _get_osfhandle(fd) : -1;
+    if (fd < 0 || handle == -1 || handle == -2) {
+        if (freopen("NUL", "w", stream) == nullptr) {
+            return -1;
+        }
+    }
+    return _fileno(stream);
+#else
+    return fileno(stream);
+#endif
+}
+
 void stop_log_capture() {
     fflush(stdout);
     fflush(stderr);
 
     int saved_stdout_fd = -1;
     int saved_stderr_fd = -1;
+    int out_fd = STDOUT_FILENO;
+    int err_fd = STDERR_FILENO;
     int log_read_fd = -1;
     int log_write_fd = -1;
     std::thread log_thread;
@@ -294,6 +319,8 @@ void stop_log_capture() {
         std::lock_guard<std::mutex> lock(g_log_mutex);
         saved_stdout_fd = g_saved_stdout_fd;
         saved_stderr_fd = g_saved_stderr_fd;
+        out_fd = g_stdout_fd;
+        err_fd = g_stderr_fd;
         log_read_fd = g_log_read_fd;
         log_write_fd = g_log_write_fd;
         g_saved_stdout_fd = -1;
@@ -304,11 +331,11 @@ void stop_log_capture() {
     }
 
     if (saved_stdout_fd >= 0) {
-        dup2(saved_stdout_fd, STDOUT_FILENO);
+        dup2(saved_stdout_fd, out_fd);
         close(saved_stdout_fd);
     }
     if (saved_stderr_fd >= 0) {
-        dup2(saved_stderr_fd, STDERR_FILENO);
+        dup2(saved_stderr_fd, err_fd);
         close(saved_stderr_fd);
     }
     if (log_write_fd >= 0) {
@@ -341,8 +368,10 @@ void start_log_capture(const std::string& runtime_root) {
         return;
     }
 
-    const int saved_stdout_fd = dup(STDOUT_FILENO);
-    const int saved_stderr_fd = dup(STDERR_FILENO);
+    const int out_fd = stream_fd(stdout);
+    const int err_fd = stream_fd(stderr);
+    const int saved_stdout_fd = out_fd >= 0 ? dup(out_fd) : -1;
+    const int saved_stderr_fd = err_fd >= 0 ? dup(err_fd) : -1;
     if (saved_stdout_fd < 0 || saved_stderr_fd < 0) {
         if (saved_stdout_fd >= 0) close(saved_stdout_fd);
         if (saved_stderr_fd >= 0) close(saved_stderr_fd);
@@ -358,15 +387,23 @@ void start_log_capture(const std::string& runtime_root) {
         g_log_write_fd = log_pipe[1];
         g_saved_stdout_fd = saved_stdout_fd;
         g_saved_stderr_fd = saved_stderr_fd;
+        g_stdout_fd = out_fd;
+        g_stderr_fd = err_fd;
         g_log_tail.clear();
         g_log_file_size = 0;
         g_log_file_path = runtime_root + "/fujinet-console.log";
         rewrite_log_file_locked();
     }
 
-    dup2(log_pipe[1], STDOUT_FILENO);
-    dup2(log_pipe[1], STDERR_FILENO);
+    dup2(log_pipe[1], out_fd);
+    dup2(log_pipe[1], err_fd);
+#if defined(_WIN32)
+    /* the CRT treats _IOLBF as full buffering: lines would sit in a 4 KB
+     * buffer instead of reaching the log */
+    setvbuf(stdout, nullptr, _IONBF, 0);
+#else
     setvbuf(stdout, nullptr, _IOLBF, 0);
+#endif
     setvbuf(stderr, nullptr, _IONBF, 0);
 
     std::thread log_thread([read_fd = log_pipe[0]]() {

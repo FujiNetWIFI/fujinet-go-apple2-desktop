@@ -233,7 +233,7 @@ target_link_libraries(apple2session PUBLIC
   Threads::Threads
 )
 if(WIN32)
-  target_link_libraries(apple2session PUBLIC ws2_32)
+  target_link_libraries(apple2session PUBLIC ws2_32 winmm)
 else()
   target_link_libraries(apple2session PUBLIC dl m)
 endif()

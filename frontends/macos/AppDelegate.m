@@ -273,9 +273,22 @@ static const option_row kOptionRows[] = {
     int n = apple2session_fujinet_copy_log(_session, buf, sizeof(buf));
     NSString *text = n > 0 ? [NSString stringWithUTF8String:buf]
                            : @"(no FujiNet output yet)";
-    if (text)
-        _logView.string = text;
-    [_logView scrollToEndOfDocument:nil];
+    NSScrollView *scroll = _logView.enclosingScrollView;
+    const NSPoint origin = scroll.contentView.bounds.origin;
+    const BOOL atEnd =
+        !scroll || (NSMaxY(scroll.contentView.documentVisibleRect) >=
+                    NSMaxY(((NSView *)scroll.documentView).frame) - 4.0);
+    /* Unchanged: leave the view alone (keeps the scroll position and any
+     * selection). Follow the tail only while the reader is at the bottom. */
+    if (!text || [text isEqualToString:_logView.string])
+        return;
+    _logView.string = text;
+    if (atEnd) {
+        [_logView scrollToEndOfDocument:nil];
+    } else {
+        [scroll.contentView scrollToPoint:origin];
+        [scroll reflectScrolledClipView:scroll.contentView];
+    }
 }
 
 - (void)showDebugger:(id)sender

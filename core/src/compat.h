@@ -15,6 +15,13 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <time.h>
+#if defined(_WIN32)
+#include <windows.h>
+#include <mmsystem.h>
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+#endif
 
 /* setenv() is POSIX; MSVCRT spells it _putenv_s. Same shim the FujiNet
  * firmware already carries in lib/clock/Clock.cpp. */
@@ -49,8 +56,47 @@ static inline void apple2_sleep_until_us(long target_us)
     while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) ==
            EINTR)
         ;
+#elif defined(_WIN32)
+    /* nanosleep is Sleep() under winpthreads, which rounds up to the 15.6 ms
+     * scheduler tick: frames came out in bursts though the average rate was
+     * right. A high-resolution waitable timer (Windows 10 1803+) wakes within
+     * a fraction of a millisecond; older systems get a 1 ms tick
+     * (timeBeginPeriod) and an ordinary waitable timer. The emulator thread is
+     * the only caller. */
+    static HANDLE timer;
+    static int tried;
+    struct timespec now;
+    long remain;
+    if (!tried) {
+        tried = 1;
+        timer = CreateWaitableTimerExW(NULL, NULL,
+                                       CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                       TIMER_ALL_ACCESS);
+        if (!timer) {
+            timeBeginPeriod(1);
+            timer = CreateWaitableTimerExW(NULL, NULL, 0, TIMER_ALL_ACCESS);
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    remain = target_us - (long)(now.tv_sec * 1000000L + now.tv_nsec / 1000L);
+    if (remain <= 0)
+        return;
+    if (timer) {
+        LARGE_INTEGER due;
+        due.QuadPart = -(LONGLONG)remain * 10; /* relative, 100 ns units */
+        if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+            WaitForSingleObject(timer, INFINITE);
+            return;
+        }
+    }
+    {
+        struct timespec rel;
+        rel.tv_sec = remain / 1000000L;
+        rel.tv_nsec = (remain % 1000000L) * 1000L;
+        nanosleep(&rel, NULL);
+    }
 #else
-    /* macOS and Windows have no absolute-deadline sleep: nap the remaining
+    /* macOS has no absolute-deadline sleep: nap the remaining
      * delta and re-check, so a short nap can't overshoot the target. */
     for (;;) {
         struct timespec now, rel;
