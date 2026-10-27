@@ -3,7 +3,7 @@
   <id>online.fujinet.go.apple2.gnome</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <name>FujiNet Go Apple II</name>
+  <name>FujiNet Go Apple II (GNOME)</name>
   <summary>Self-contained Apple II with built-in FujiNet</summary>
   <description>
     <p>
@@ -19,6 +19,7 @@
     </p>
   </description>
   <launchable type="desktop-id">online.fujinet.go.apple2.gnome.desktop</launchable>
+  <icon type="stock">online.fujinet.go.apple2.gnome</icon>
   <!-- Software centres classify from these, not from the .desktop
        Categories= line; without them the app lands in no section at all. -->
   <categories>
@@ -30,18 +31,31 @@
   <screenshots>
     <screenshot type="default">
       <caption>FujiNet CONFIG running on the emulated Apple II</caption>
-      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/main/data/screenshots/1_fujinet_config.png</image>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/v0.5.2/data/screenshots/1_fujinet_config.png</image>
     </screenshot>
     <screenshot>
       <caption>The built-in 6502 debugger</caption>
-      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/main/data/screenshots/2_debugger.png</image>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/v0.5.2/data/screenshots/2_debugger.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Preferences: model, slots and display</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/v0.5.2/data/screenshots/3_preferences.png</image>
     </screenshot>
   </screenshots>
   <developer id="online.fujinet">
-    <name>Thomas Cherryhomes</name>
+    <name>FujiNet</name>
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.2" date="2026-10-27">
+      <description>
+        <p>
+          The Flatpak builds on the GNOME 51 runtime. The software-centre
+          listing now credits FujiNet as developer, declares the app icon, and
+          shows a full set of screenshots for each frontend.
+        </p>
+      </description>
+    </release>
     <release version="0.5.1" date="2026-10-27">
       <description>
         <p>

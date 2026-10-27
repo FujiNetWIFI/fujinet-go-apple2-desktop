@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=FujiNet Go Apple II
+Name=FujiNet Go Apple II (KDE)
 GenericName=Apple II with FujiNet
 Comment=Self-contained Apple II computer with built-in FujiNet
 Exec=fujinet-go-apple2-kde
