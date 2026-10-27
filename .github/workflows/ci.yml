@@ -414,7 +414,7 @@ jobs:
             build-aux/flatpak/online.fujinet.go.apple2.${{ matrix.frontend }}.yml
       - name: Bundle
         run: |
-          flatpak build-bundle repo \
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo \
             fujinet-go-apple2-${{ matrix.frontend }}.flatpak \
             online.fujinet.go.apple2.${{ matrix.frontend }}
       - name: Upload
