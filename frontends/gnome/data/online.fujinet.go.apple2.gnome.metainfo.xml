@@ -47,6 +47,13 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.3" date="2026-10-27">
+      <description>
+        <p>
+          The Flatpak bundles now name Flathub as their runtime repository, so a downloaded bundle can fetch the GNOME or KDE runtime on a machine that has not set up Flathub.
+        </p>
+      </description>
+    </release>
     <release version="0.5.2" date="2026-10-27">
       <description>
         <p>
