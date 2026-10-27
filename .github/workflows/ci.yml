@@ -384,7 +384,7 @@ jobs:
           - frontend: gnome
             runtime: org.gnome.Platform
             sdk: org.gnome.Sdk
-            version: '49'
+            version: '51'
           - frontend: kde
             runtime: org.kde.Platform
             sdk: org.kde.Sdk
