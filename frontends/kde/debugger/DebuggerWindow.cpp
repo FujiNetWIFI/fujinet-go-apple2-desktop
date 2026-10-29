@@ -399,6 +399,14 @@ void DebuggerWindow::refreshFujinet(bool force)
 
     if (!slot)
         m_fujiNote->setText(QStringLiteral("FujiNet is off (Preferences ▸ Slots)."));
+    else if (apple2session_fujinet_external(m_session))
+        m_fujiNote->setText(QStringLiteral("External FujiNet on the slot %1 SmartPort card, "
+                                           "listening at %2%3.")
+                                .arg(slot)
+                                .arg(QString::fromUtf8(apple2session_slip_endpoint(m_session)))
+                                .arg(apple2session_fujinet_link(m_session)
+                                         ? QStringLiteral(", connected")
+                                         : QStringLiteral(", not connected")));
     else if (!apple2session_fujinet_running(m_session))
         m_fujiNote->setText(QStringLiteral("FujiNet's card is in slot %1, but FujiNet is "
                                            "not running.").arg(slot));

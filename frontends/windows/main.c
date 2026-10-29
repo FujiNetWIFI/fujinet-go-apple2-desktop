@@ -312,6 +312,7 @@ static HMENU build_menu(void)
     AppendMenuA(media, MF_STRING, IDM_IMPORT_ROMS, "Import System &ROMs...");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)media, "Me&dia");
 
+    AppendMenuA(fujinet, MF_STRING, IDM_FUJINET_CONN, "Con&nection...");
     AppendMenuA(fujinet, MF_STRING, IDM_FUJINET_CONFIG, "&Configuration...");
     AppendMenuA(fujinet, MF_STRING, IDM_FUJINET_LOG, "Console &Log...");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)fujinet, "&FujiNet");
@@ -416,8 +417,175 @@ static void import_roms(HWND hwnd)
 
 static void show_fujinet_config(void)
 {
+    if (apple2session_fujinet_external(g_session)) {
+        MessageBoxA(g_hwnd, "FujiNet is external: use the web UI of the "
+                    "instance that connects to this app.", APP_TITLE,
+                    MB_ICONINFORMATION);
+        return;
+    }
     ShellExecuteA(NULL, "open", apple2session_fujinet_webui_url(g_session),
                   NULL, NULL, SW_SHOWNORMAL);
+}
+
+/* ---- FujiNet connection window ------------------------------------------- */
+
+#define IDC_CONN_EXTERNAL 301
+#define IDC_CONN_ADDR     302
+#define IDC_CONN_OK       303
+#define IDC_CONN_CANCEL   304
+#ifndef EM_SETCUEBANNER
+#define EM_SETCUEBANNER 0x1501
+#endif
+
+static HWND g_conn_window;
+
+static HWND conn_child(HWND parent, const char *cls, const char *text,
+                       DWORD style, int x, int y, int cx, int cy, int id)
+{
+    HWND h = CreateWindowExA(
+        0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, cx, cy, parent,
+        (HMENU)(UINT_PTR)id,
+        (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), NULL);
+    SendMessageA(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT),
+                 TRUE);
+    return h;
+}
+
+static void conn_close(HWND hwnd)
+{
+    EnableWindow(g_hwnd, TRUE);
+    DestroyWindow(hwnd);
+    SetForegroundWindow(g_hwnd);
+}
+
+static void conn_apply(HWND hwnd)
+{
+    char addr[96], host[64];
+    int port, external, changed;
+    const char *old;
+
+    external = SendDlgItemMessageA(hwnd, IDC_CONN_EXTERNAL, BM_GETCHECK, 0,
+                                   0) == BST_CHECKED;
+    GetDlgItemTextA(hwnd, IDC_CONN_ADDR, addr, sizeof(addr));
+    /* trim */
+    {
+        char *s = addr, *e;
+        while (*s == ' ' || *s == '\t') s++;
+        memmove(addr, s, strlen(s) + 1);
+        e = addr + strlen(addr);
+        while (e > addr && (e[-1] == ' ' || e[-1] == '\t')) *--e = '\0';
+    }
+    if (external &&
+        apple2session_parse_hostport(addr, host, sizeof(host), &port) != 0) {
+        MessageBoxA(hwnd, "That is not an address:port.\n\nExample: "
+                    "0.0.0.0:1985", "External FujiNet", MB_ICONWARNING);
+        SetFocus(GetDlgItem(hwnd, IDC_CONN_ADDR));
+        return;
+    }
+    old = apple2session_get_str(g_session, "fujinet_external_addr", "");
+    changed = apple2session_get_int(g_session, "fujinet_external", 0) !=
+                  external ||
+              strcmp(old, addr) != 0;
+    apple2session_set_int(g_session, "fujinet_external", external);
+    apple2session_set_str(g_session, "fujinet_external_addr", addr);
+    conn_close(hwnd);
+    if (changed)
+        restart_session();
+}
+
+static LRESULT CALLBACK conn_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case IDC_CONN_EXTERNAL:
+            EnableWindow(GetDlgItem(hwnd, IDC_CONN_ADDR),
+                         SendDlgItemMessageA(hwnd, IDC_CONN_EXTERNAL,
+                                             BM_GETCHECK, 0, 0) ==
+                             BST_CHECKED);
+            return 0;
+        case IDC_CONN_OK:
+            conn_apply(hwnd);
+            return 0;
+        case IDC_CONN_CANCEL:
+            conn_close(hwnd);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        conn_close(hwnd);
+        return 0;
+    case WM_DESTROY:
+        g_conn_window = NULL;
+        return 0;
+    }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+}
+
+/* FujiNet > Connection: use the built-in FujiNet, or wait for another
+ * instance to dial in to an address:port. The machine restarts on OK. */
+static void show_fujinet_connection(HINSTANCE inst)
+{
+    static int registered;
+    HWND w;
+    RECT rc;
+    int x, y;
+
+    if (g_conn_window) {
+        SetForegroundWindow(g_conn_window);
+        return;
+    }
+    if (!registered) {
+        WNDCLASSA wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc = conn_proc;
+        wc.hInstance = inst;
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = "Apple2ConnWindow";
+        RegisterClassA(&wc);
+        registered = 1;
+    }
+    GetWindowRect(g_hwnd, &rc);
+    x = rc.left + 60;
+    y = rc.top + 80;
+    g_conn_window = CreateWindowExA(
+        WS_EX_DLGMODALFRAME, "Apple2ConnWindow", "FujiNet Connection",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, 460, 250, g_hwnd, NULL, inst,
+        NULL);
+    w = g_conn_window;
+    conn_child(w, "BUTTON", "Use external FujiNet",
+               BS_AUTOCHECKBOX | WS_TABSTOP, 16, 14, 420, 22,
+               IDC_CONN_EXTERNAL);
+    conn_child(w, "STATIC", "Listen address:port", 0, 16, 48, 140, 20, 0);
+    {
+        HWND edit = conn_child(w, "EDIT",
+                               apple2session_get_str(g_session,
+                                                   "fujinet_external_addr",
+                                                   ""),
+                               WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 160,
+                               44, 276, 24, IDC_CONN_ADDR);
+        SendMessageA(edit, EM_SETCUEBANNER, FALSE,
+                     (LPARAM)L"0.0.0.0:1985");
+    }
+    conn_child(w, "STATIC",
+               "Skips the built-in FujiNet. Point the other instance's "
+               "SmartPort-over-SLIP client at this address. 0.0.0.0 "
+               "accepts connections from the network; 127.0.0.1 only from "
+               "this computer.",
+               0, 16, 82, 420, 64, 0);
+    conn_child(w, "BUTTON", "OK", BS_DEFPUSHBUTTON | WS_TABSTOP, 270, 166, 80,
+               26, IDC_CONN_OK);
+    conn_child(w, "BUTTON", "Cancel", BS_PUSHBUTTON | WS_TABSTOP, 356, 166,
+               80, 26, IDC_CONN_CANCEL);
+    {
+        int ext = apple2session_get_int(g_session, "fujinet_external", 0);
+        SendDlgItemMessageA(w, IDC_CONN_EXTERNAL, BM_SETCHECK,
+                            ext ? BST_CHECKED : BST_UNCHECKED, 0);
+        EnableWindow(GetDlgItem(w, IDC_CONN_ADDR), ext);
+    }
+    EnableWindow(g_hwnd, FALSE);
+    ShowWindow(w, SW_SHOW);
 }
 
 /* ---- console log window -------------------------------------------------- */
@@ -489,6 +657,12 @@ static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 static void show_fujinet_log(HINSTANCE inst)
 {
     static int registered;
+    if (apple2session_fujinet_external(g_session)) {
+        MessageBoxA(g_hwnd, "FujiNet is external: its console output is in "
+                    "the process that is running it.", APP_TITLE,
+                    MB_ICONINFORMATION);
+        return;
+    }
     if (g_log_window) {
         SetForegroundWindow(g_log_window);
         return;
@@ -585,6 +759,10 @@ static void on_command(HWND hwnd, UINT cmd)
     case IDM_POWER_CYCLE: apple2session_reset(g_session, 1); break;
     case IDM_IMPORT_MEDIA: import_media(hwnd); break;
     case IDM_IMPORT_ROMS:  import_roms(hwnd); break;
+    case IDM_FUJINET_CONN:
+        show_fujinet_connection(
+            (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE));
+        break;
     case IDM_FUJINET_CONFIG: show_fujinet_config(); break;
     case IDM_FUJINET_LOG:
         show_fujinet_log((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE));

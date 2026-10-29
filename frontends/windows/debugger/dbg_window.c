@@ -352,6 +352,11 @@ static void refresh_fujinet(debugger *d, int force)
     n = apple2debug_fujinet_trace(d->dbg, p, TRACE_MAX);
     if (!slot)
         snprintf(note, sizeof note, "FujiNet is off (Preferences \xe2\x96\xb8 Slots).");
+    else if (apple2session_fujinet_external(d->session))
+        snprintf(note, sizeof note,
+                 "External FujiNet on the slot %d SmartPort card, listening at %s%s.", slot,
+                 apple2session_slip_endpoint(d->session),
+                 apple2session_fujinet_link(d->session) ? ", connected" : ", not connected");
     else if (!apple2session_fujinet_running(d->session))
         snprintf(note, sizeof note,
                  "FujiNet's card is in slot %d, but FujiNet is not running.", slot);

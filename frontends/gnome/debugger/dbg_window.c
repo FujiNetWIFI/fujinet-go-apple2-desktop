@@ -323,6 +323,10 @@ static void refresh_fujinet(DbgWindow *w, gboolean force)
 
     if (!slot)
         g_strlcpy(note, "FujiNet is off (Preferences \xe2\x96\xb8 Slots).", sizeof note);
+    else if (apple2session_fujinet_external(w->session))
+        g_snprintf(note, sizeof note, "External FujiNet on the slot %d SmartPort card, listening at %s%s.",
+                   slot, apple2session_slip_endpoint(w->session),
+                   apple2session_fujinet_link(w->session) ? ", connected" : ", not connected");
     else if (!apple2session_fujinet_running(w->session))
         g_snprintf(note, sizeof note, "FujiNet's card is in slot %d, but FujiNet is not running.",
                    slot);

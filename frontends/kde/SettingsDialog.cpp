@@ -15,7 +15,40 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QMessageBox>
 #include <QVBoxLayout>
+
+void SettingsDialog::done(int result)
+{
+    const QByteArray addr = m_externalAddr->text().trimmed().toUtf8();
+    const int external = m_external->isChecked() ? 1 : 0;
+    char host[64];
+    int port;
+
+    if (external &&
+        apple2session_parse_hostport(addr.constData(), host, sizeof host,
+                                     &port) != 0) {
+        QMessageBox::warning(
+            this, QStringLiteral("External FujiNet"),
+            QStringLiteral("\"%1\" is not an address:port. Example: "
+                           "0.0.0.0:1985")
+                .arg(m_externalAddr->text()));
+        m_externalAddr->setFocus();
+        return;
+    }
+    if (apple2session_get_int(m_session, "fujinet_external", 0) != external) {
+        apple2session_set_int(m_session, "fujinet_external", external);
+        m_machineDirty = true;
+    }
+    if (QString::fromUtf8(apple2session_get_str(
+            m_session, "fujinet_external_addr", "")) !=
+        QString::fromUtf8(addr)) {
+        apple2session_set_str(m_session, "fujinet_external_addr",
+                              addr.constData());
+        m_machineDirty = true;
+    }
+    QDialog::done(result);
+}
 
 QComboBox *SettingsDialog::addOptionRow(QFormLayout *form,
                                         const QString &label, const char *key,
@@ -83,6 +116,32 @@ SettingsDialog::SettingsDialog(apple2session *session, QWidget *parent)
     slotNote->setWordWrap(true);
     slotForm->addRow(slotNote);
     outer->addWidget(slotBox);
+
+    auto *fujinetBox = new QGroupBox(QStringLiteral("FujiNet"), this);
+    auto *fujinetForm = new QFormLayout(fujinetBox);
+    m_external = new QCheckBox(fujinetBox);
+    m_external->setChecked(
+        apple2session_get_int(m_session, "fujinet_external", 0));
+    fujinetForm->addRow(QStringLiteral("Use external FujiNet"), m_external);
+    m_externalAddr = new QLineEdit(
+        QString::fromUtf8(apple2session_get_str(m_session,
+                                                "fujinet_external_addr", "")),
+        fujinetBox);
+    m_externalAddr->setPlaceholderText(QStringLiteral("0.0.0.0:1985"));
+    m_externalAddr->setEnabled(m_external->isChecked());
+    connect(m_external, &QCheckBox::toggled, m_externalAddr,
+            &QWidget::setEnabled);
+    fujinetForm->addRow(QStringLiteral("Listen address:port"),
+                        m_externalAddr);
+    auto *fujinetNote = new QLabel(
+        QStringLiteral("Skips the built-in FujiNet and waits for another "
+                       "instance to connect to the slot 7 card. 0.0.0.0 "
+                       "accepts connections from the network; 127.0.0.1 only "
+                       "from this computer."),
+        fujinetBox);
+    fujinetNote->setWordWrap(true);
+    fujinetForm->addRow(fujinetNote);
+    outer->addWidget(fujinetBox);
 
     auto *displayBox = new QGroupBox(QStringLiteral("Display"), this);
     auto *displayForm = new QFormLayout(displayBox);

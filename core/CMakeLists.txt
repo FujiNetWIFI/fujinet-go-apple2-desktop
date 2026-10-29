@@ -247,6 +247,9 @@ install(FILES "${AW}/bin/APPLE2E.SYM" "${AW}/bin/A2_BASIC.SYM"
 add_executable(input_test tests/input_test.c)
 target_link_libraries(input_test apple2session)
 
+add_executable(hostport_test tests/hostport_test.c)
+target_link_libraries(hostport_test apple2session)
+
 add_executable(boot_smoke tests/boot_smoke.c)
 target_link_libraries(boot_smoke apple2session)
 
@@ -268,6 +271,7 @@ target_link_libraries(sptrace_test apple2session)
 target_include_directories(sptrace_test PRIVATE debugger)
 
 add_test(NAME input COMMAND input_test)
+add_test(NAME hostport COMMAND hostport_test)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME sptrace COMMAND sptrace_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)

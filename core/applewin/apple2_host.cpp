@@ -49,6 +49,8 @@ void ResetMachineState();
 extern "C" void (*fngo_sp_trace_hook)(int kind, uint8_t seq,
                                       const uint8_t* buf, size_t len);
 extern "C" int fngo_sp_device_count(void);
+extern "C" char fngo_sp_listen_host[64];
+extern "C" int fngo_sp_listen_port;
 
 namespace {
 
@@ -396,6 +398,12 @@ void apple2host_set_sp_trace(Apple2SpTraceSink sink, void* user) {
 }
 
 int apple2host_fujinet_devices(void) { return g_sp_devices; }
+
+void apple2host_set_slip_listener(const char* host, int port) {
+    std::snprintf(fngo_sp_listen_host, sizeof(fngo_sp_listen_host), "%s",
+                  host ? host : "");
+    fngo_sp_listen_port = port > 0 ? port : 0;
+}
 
 // --- debugger seam ----------------------------------------------------------
 

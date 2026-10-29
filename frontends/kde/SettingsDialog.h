@@ -5,8 +5,10 @@
 
 #pragma once
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
+#include <QLineEdit>
 #include <QVector>
 
 #include "apple2session.h"
@@ -19,6 +21,10 @@ public:
     /* True when a machine/slot option changed, so the caller knows the
      * session has to be restarted for it to take effect. */
     bool machineDirty() const { return m_machineDirty; }
+
+    /* Saves the external FujiNet fields first; an address that is not
+     * host:port keeps the dialog open. */
+    void done(int result) override;
 
 signals:
     /* Display-only options apply live. */
@@ -33,5 +39,7 @@ private:
                             const char *(*nameAt)(int), const char *def);
 
     apple2session *m_session;
+    QCheckBox *m_external = nullptr;
+    QLineEdit *m_externalAddr = nullptr;
     bool m_machineDirty = false;
 };

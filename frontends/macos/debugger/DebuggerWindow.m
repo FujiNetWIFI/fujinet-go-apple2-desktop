@@ -645,6 +645,13 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
 
     if (!slot)
         _fujiNote.stringValue = @"FujiNet is off (Preferences ▸ Slots).";
+    else if (apple2session_fujinet_external(_session))
+        _fujiNote.stringValue = [NSString
+            stringWithFormat:@"External FujiNet on the slot %d SmartPort card, "
+                             @"listening at %s%@.", slot,
+                             apple2session_slip_endpoint(_session),
+                             apple2session_fujinet_link(_session)
+                                 ? @", connected" : @", not connected"];
     else if (!apple2session_fujinet_running(_session))
         _fujiNote.stringValue = [NSString
             stringWithFormat:@"FujiNet's card is in slot %d, but FujiNet is "

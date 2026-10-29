@@ -250,7 +250,19 @@ def apply_all(root):
     # previous listener (machine-type changes re-insert the card).
     #
     # Send this upstream to FujiNetWIFI/AppleWin.
+    # The listener binds the address the session sets through
+    # apple2host_set_slip_listener() (the "Use external FujiNet" field), else
+    # the Listener's default. The two globals are defined with the other fngo_
+    # hooks in patch 16.
     patch(root, "source/SmartPortOverSlip.cpp", [
+        (
+            "SmartPortOverSlip::SmartPortOverSlip(const UINT slot) : Card(CT_SmartPortOverSlip, slot)\n",
+            "// [fujinet-go-apple2-desktop] Set by apple2host_set_slip_listener().\n"
+            "extern \"C\" char fngo_sp_listen_host[64];\n"
+            "extern \"C\" int fngo_sp_listen_port;\n"
+            "\n"
+            "SmartPortOverSlip::SmartPortOverSlip(const UINT slot) : Card(CT_SmartPortOverSlip, slot)\n",
+        ),
         (
             '\tLogFileOutput("SmartPortOverSlip ctor, slot: %d\\n", slot);',
             '\tLogFileOutput("SmartPortOverSlip ctor, slot: %d\\n", slot);\n'
@@ -260,8 +272,10 @@ def apply_all(root):
             '\t// which is where upstream starts it, so without this nothing ever\n'
             '\t// listens and FujiNet retries forever.\n'
             '\tauto &listener = GetCommandListener();\n'
-            '\tlistener.Initialize(listener.default_listener_address,\n'
-            '\t                    listener.default_port,\n'
+            '\tlistener.Initialize(fngo_sp_listen_host[0] ? std::string(fngo_sp_listen_host)\n'
+            '\t                                           : listener.default_listener_address,\n'
+            '\t                    fngo_sp_listen_port ? static_cast<uint16_t>(fngo_sp_listen_port)\n'
+            '\t                                        : listener.default_port,\n'
             '\t                    listener.default_response_timeout);\n'
             '\tlistener.set_start_on_init(true);\n'
             '\tlistener.start();',
@@ -358,6 +372,10 @@ def apply_all(root):
             "extern \"C\" {\n"
             "void (*fngo_sp_trace_hook)(int kind, uint8_t seq, const uint8_t *buf, size_t len) = nullptr;\n"
             "int fngo_sp_device_count(void) { return GetCommandListener().get_total_device_count(); }\n"
+            "\n"
+            "// Where the card's Listener binds (patch 17); empty/0 = the default.\n"
+            "char fngo_sp_listen_host[64] = \"\";\n"
+            "int fngo_sp_listen_port = 0;\n"
             "}\n",
         ),
         (

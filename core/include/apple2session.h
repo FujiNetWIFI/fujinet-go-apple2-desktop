@@ -93,6 +93,10 @@ typedef struct {
      * just makes it a settable option instead of a permanent default. */
     int scanlines;
     int enable_fujinet;     /* start the in-process FujiNet runtime */
+    int external_fujinet;   /* 1: don't start it; listen for another FujiNet
+                             * instance on slip_listen instead */
+    const char *slip_listen; /* "host:port" or "port" the SmartPort listener
+                              * binds (external only); NULL/"" = 127.0.0.1:1985 */
     int enable_audio;       /* open the SDL audio device */
     int enable_gamepad;     /* start the SDL gamepad thread */
 } apple2session_start_opts;
@@ -192,7 +196,18 @@ void apple2session_gamepad_assign(apple2session *s, int idx, int port);
 int  apple2session_render_audio(apple2session *s, int16_t *out, int nsamples);
 
 /* ---- FujiNet -------------------------------------------------------------*/
+/* Parses the "Use external FujiNet" address field: "host:port" (host an IPv4
+ * literal; "localhost" is 127.0.0.1) or a bare "port". Empty text means the
+ * default, 127.0.0.1:1985. Returns 0 and fills host/port, or -1 when the text
+ * is not an address:port (nothing is written then). */
+int         apple2session_parse_hostport(const char *text, char *host,
+                                         int hostsz, int *port);
 int         apple2session_fujinet_running(const apple2session *s);
+/* 1 when the session was started to listen for an external FujiNet. */
+int         apple2session_fujinet_external(const apple2session *s);
+/* "host:port" the SmartPort listener is bound to (the running session's, or
+ * the default 127.0.0.1:1985 before the first start). */
+const char *apple2session_slip_endpoint(const apple2session *s);
 /* FujiNet has registered its SmartPort devices with the card (the SLIP link
  * is up). */
 int         apple2session_fujinet_link(const apple2session *s);

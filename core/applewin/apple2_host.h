@@ -116,6 +116,11 @@ typedef void (*Apple2SpTraceSink)(int kind, uint8_t seq, const uint8_t *buf,
                                   size_t len, void *user);
 void apple2host_set_sp_trace(Apple2SpTraceSink sink, void *user);
 
+/* Where the card's SmartPort-over-SLIP Listener binds: an IPv4 literal and a
+ * port. NULL/"" and 0 mean the default, 127.0.0.1:1985. Takes effect when the
+ * card is inserted, so set it before apple2host_core_start(). */
+void apple2host_set_slip_listener(const char *host, int port);
+
 /* SmartPort devices FujiNet has registered with the card's Listener; 0 means
  * no link. Read from the Listener on the emulator thread after each frame
  * and cached, so any thread may call this. */

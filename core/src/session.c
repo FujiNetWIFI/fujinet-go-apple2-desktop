@@ -266,6 +266,7 @@ static void *emu_thread_main(void *arg)
     apple2session *s = arg;
     long next_us;
     long frame_us;
+    long link_deadline_us;
     const int pace_log = getenv("APPLE2_PACE_LOG") != NULL;
 
     apple2_thread_setname("apple2-emu");
@@ -281,6 +282,10 @@ static void *emu_thread_main(void *arg)
     apple2host_set_variable(OPT_PREFIX "slot7", s->opt_slot7);
     apple2host_set_variable(OPT_PREFIX "video_mode", s->opt_video_mode);
     apple2host_set_variable(OPT_PREFIX "video_style", s->opt_video_style);
+
+    /* Where the card's listener binds: the card binds it as it is inserted,
+     * during core_start. */
+    apple2host_set_slip_listener(s->slip_host, s->slip_port);
 
     /* Tell the external ROM loader where to look. Only a
      * WITH_APPLE_ROMS=OFF build reads this; setting it always keeps the two
@@ -337,6 +342,7 @@ static void *emu_thread_main(void *arg)
     }
 
     next_us = read_timer_us();
+    link_deadline_us = next_us + APPLE2_LINK_REBOOT_US;
     while (!s->stop_flag) {
         /* Resets are requested from UI threads but must be applied here:
          * they reach into core state that retro_run owns. */
@@ -353,6 +359,20 @@ static void *emu_thread_main(void *arg)
             apple2debug_session_frame(s);
         else
             apple2host_core_run_frame();
+
+        /* An external FujiNet connects whenever it likes. The built-in one is
+         * cold-booted into (apple2session_start); here the first link-up soon
+         * after the machine started does the same, so the autostart ROM finds
+         * the device. A FujiNet that turns up later leaves the machine alone
+         * (it would wipe what the user is doing): Reset boots it. */
+        if (s->link_reboot) {
+            if (apple2host_fujinet_devices() > 0) {
+                s->link_reboot = 0;
+                s->reset_request = 2;
+            } else if (read_timer_us() > link_deadline_us) {
+                s->link_reboot = 0;
+            }
+        }
 
         /* Pacing: one emulated frame per UI vsync tick while ticks arrive,
          * else the wall clock. Once-per-second diagnostics with
@@ -493,6 +513,8 @@ void apple2session_default_opts(apple2session *s,
     opts->slot7 = s->opt_slot7;
     opts->video_mode = s->opt_video_mode;
     opts->enable_fujinet = 1;
+    opts->external_fujinet = apple2session_get_int(s, "fujinet_external", 0);
+    opts->slip_listen = apple2session_get_str(s, "fujinet_external_addr", NULL);
     opts->enable_audio = 1;
     opts->enable_gamepad = 1;
 }
@@ -506,6 +528,26 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
     }
 
     s->opts = *opts;
+    s->fujinet_external = 0;
+    snprintf(s->slip_host, sizeof s->slip_host, "127.0.0.1");
+    s->slip_port = APPLE2SESSION_SLIP_PORT;
+    if (opts->external_fujinet) {
+        if (apple2session_parse_hostport(opts->slip_listen, s->slip_host,
+                                         sizeof s->slip_host,
+                                         &s->slip_port) != 0) {
+            session_set_error(s, "\"%s\" is not an address:port for the "
+                              "external FujiNet (example: 0.0.0.0:%d)",
+                              opts->slip_listen ? opts->slip_listen : "",
+                              APPLE2SESSION_SLIP_PORT);
+            pthread_mutex_unlock(&s->lifecycle_mtx);
+            return -1;
+        }
+        s->fujinet_external = 1;
+        s->webui_url[0] = '\0';
+    }
+    snprintf(s->slip_endpoint, sizeof s->slip_endpoint, "%s:%d", s->slip_host,
+             s->slip_port);
+    s->opts.slip_listen = NULL; /* the caller's storage; not kept */
     /* Take our own copies: opts may point at caller storage that goes away,
      * and the emulator thread reads these after this call returns. */
     adopt_opt(s, s->opt_machine, k_machines, opts->machine, k_machines[0]);
@@ -529,6 +571,7 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
 
     s->stop_flag = 0;
     s->reset_request = 0;
+    s->link_reboot = s->fujinet_external;
     s->frame_serial = 0;
     s->frame_w = 0;
     s->frame_h = 0;
@@ -592,7 +635,10 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
             return -1;
         }
 
-        if (opts->enable_fujinet) {
+        /* An external FujiNet needs nothing started: it dials the listener
+         * the card has just bound, and the emulator thread cold-boots the
+         * machine when it does (link_reboot). */
+        if (!s->fujinet_external && opts->enable_fujinet) {
             /* A missing or broken runtime is not fatal: the machine still
              * boots, just with no FujiNet device on the bus. */
             if (fujinet_start(s) == 0) {
@@ -646,6 +692,8 @@ void apple2session_stop(apple2session *s)
      * does may reach a session that is going away. */
     apple2host_set_sp_trace(NULL, NULL);
     apple2host_audio_set_active(1);
+    s->fujinet_external = 0;
+    s->link_reboot = 0;
     s->running = 0;
     pthread_mutex_unlock(&s->lifecycle_mtx);
 }
@@ -713,7 +761,8 @@ void apple2session_reset(apple2session *s, int mode)
      * handshake, not on the core), and once FujiNet's SLIP client has
      * reattached, reset_request re-runs the //e autostart boot scan so it
      * finds the device again. A warm reset (Ctrl-Reset) leaves FujiNet alone,
-     * matching real hardware -- it does not power-cycle peripheral cards. */
+     * matching real hardware -- it does not power-cycle peripheral cards. An
+     * external FujiNet is not ours to restart (fujinet_running is 0 then). */
     if (mode && s->fujinet_running) {
         fujinet_stop(s);
         fujinet_start(s); /* not fatal if it fails; the machine still reboots */
@@ -750,9 +799,70 @@ int apple2session_fujinet_running(const apple2session *s)
     return s->fujinet_running;
 }
 
+int apple2session_fujinet_external(const apple2session *s)
+{
+    return s->fujinet_external;
+}
+
+const char *apple2session_slip_endpoint(const apple2session *s)
+{
+    return s->slip_endpoint[0] ? s->slip_endpoint : "127.0.0.1:1985";
+}
+
+int apple2session_parse_hostport(const char *text, char *host, int hostsz,
+                                 int *port)
+{
+    char buf[80], *colon, *end;
+    const char *name = "127.0.0.1";
+    long num = APPLE2SESSION_SLIP_PORT;
+    size_t len;
+
+    if (!text) text = "";
+    while (*text == ' ' || *text == '\t') text++;
+    len = strlen(text);
+    while (len && (text[len - 1] == ' ' || text[len - 1] == '\t' ||
+                   text[len - 1] == '\n' || text[len - 1] == '\r'))
+        len--;
+    if (len >= sizeof(buf)) return -1;
+    memcpy(buf, text, len);
+    buf[len] = '\0';
+
+    if (len) {
+        colon = strrchr(buf, ':');
+        if (colon) {
+            *colon = '\0';
+            name = buf;
+            if (!*name) return -1;
+            text = colon + 1;
+        } else {
+            text = buf;
+        }
+        if (!*text) return -1;
+        num = strtol(text, &end, 10);
+        if (*end || num < 1 || num > 65535) return -1;
+        if (colon) {
+            /* The listener binds with inet_pton: an IPv4 literal only. */
+            int octet[4], used = 0, k;
+            if (strcmp(name, "localhost") == 0) {
+                name = "127.0.0.1";
+            } else {
+                if (sscanf(name, "%d.%d.%d.%d%n", &octet[0], &octet[1],
+                           &octet[2], &octet[3], &used) != 4 || name[used])
+                    return -1;
+                for (k = 0; k < 4; k++)
+                    if (octet[k] < 0 || octet[k] > 255) return -1;
+            }
+        }
+    }
+    if ((int)strlen(name) >= hostsz) return -1;
+    memcpy(host, name, strlen(name) + 1);
+    *port = (int)num;
+    return 0;
+}
+
 int apple2session_fujinet_link(const apple2session *s)
 {
-    return s->running && s->fujinet_running &&
+    return s->running && (s->fujinet_running || s->fujinet_external) &&
            apple2host_fujinet_devices() > 0;
 }
 

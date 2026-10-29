@@ -476,8 +476,8 @@ int apple2debug_fujinet_state(apple2debug *d, char *dst, int dstsz)
     if (slot)
         len = snprintf(dst, (size_t)dstsz,
                        "Card       slot %d\n"
-                       "Listener   127.0.0.1:%d (SLIP)\n",
-                       slot, APPLE2SESSION_SLIP_PORT);
+                       "Listener   %s (SLIP)\n",
+                       slot, apple2session_slip_endpoint(s));
     else
         len = snprintf(dst, (size_t)dstsz, "Card       none\n");
     if (len < 0 || len >= dstsz) return (int)strlen(dst);
@@ -485,8 +485,9 @@ int apple2debug_fujinet_state(apple2debug *d, char *dst, int dstsz)
                     "FujiNet    %s\n"
                     "Devices    %d registered\n"
                     "Link       %s\n\n",
-                    apple2session_fujinet_running(s) ? "running"
-                                                     : "not running",
+                    apple2session_fujinet_external(s) ? "external"
+                    : apple2session_fujinet_running(s) ? "running"
+                                                       : "not running",
                     s->running ? apple2host_fujinet_devices() : 0,
                     apple2session_fujinet_link(s) ? "connected"
                                                   : "not connected");

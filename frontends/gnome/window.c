@@ -250,6 +250,10 @@ static void action_fujinet_config(GSimpleAction *action, GVariant *param,
     Apple2Window *self = APPLE2_WINDOW(user_data);
     (void)action;
     (void)param;
+    if (apple2session_fujinet_external(self->session)) {
+        apple2_window_toast(self, "FujiNet is external: use its own web UI");
+        return;
+    }
     apple2_fujinet_config_show(GTK_WINDOW(self), self->session);
 }
 
@@ -259,6 +263,10 @@ static void action_fujinet_log(GSimpleAction *action, GVariant *param,
     Apple2Window *self = APPLE2_WINDOW(user_data);
     (void)action;
     (void)param;
+    if (apple2session_fujinet_external(self->session)) {
+        apple2_window_toast(self, "FujiNet is external: see its own console");
+        return;
+    }
     apple2_fujinet_log_show(GTK_WINDOW(self), self->session);
 }
 

@@ -21,6 +21,10 @@
  * "Enhanced Apple //e"); generous so a new card name cannot truncate. */
 #define APPLE2_OPT_MAX 64
 
+/* How long after the machine starts an external FujiNet's first connection
+ * still cold-boots it (see emu_thread_main). */
+#define APPLE2_LINK_REBOOT_US 60000000L
+
 #define APPLE2_FB_MAX_PIXELS \
     (APPLE2SESSION_FB_MAX_WIDTH * APPLE2SESSION_FB_MAX_HEIGHT)
 
@@ -104,6 +108,11 @@ struct apple2session {
     /* ---- FujiNet runtime (fujinet_runtime.c) ---- */
     int fujinet_loaded;  /* dlopen'd (kept for process lifetime) */
     int fujinet_running;
+    int fujinet_external;      /* listening for a FujiNet that isn't ours */
+    char slip_host[64];        /* where the SmartPort listener binds */
+    int slip_port;
+    char slip_endpoint[80];    /* "host:port" for display */
+    int link_reboot;           /* external: cold-boot when the link first comes up */
 
     /* ---- debugger ---- */
     apple2debug *debugger;

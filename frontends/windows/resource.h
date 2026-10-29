@@ -15,6 +15,7 @@
 #define IDM_SCANLINES       209
 #define IDM_ABOUT           210
 #define IDM_EXIT            211
+#define IDM_FUJINET_CONN    212
 
 /* The machine, video and slot menus are built from the option names the core
  * registers (apple2session_machine_name() and friends), so their command IDs

@@ -137,9 +137,21 @@ void MainWindow::buildMenus()
 
     QMenu *fujinet = menuBar()->addMenu(QStringLiteral("&FujiNet"));
     fujinet->addAction(QStringLiteral("&Configuration…"), this,
-                       [this] { fujinet_config_show(this, m_session); });
+                       [this] {
+        if (apple2session_fujinet_external(m_session)) {
+            status(QStringLiteral("FujiNet is external: use its own web UI"));
+            return;
+        }
+        fujinet_config_show(this, m_session);
+    });
     fujinet->addAction(QStringLiteral("Console &Log…"), this,
-                       [this] { fujinet_log_show(this, m_session); });
+                       [this] {
+        if (apple2session_fujinet_external(m_session)) {
+            status(QStringLiteral("FujiNet is external: see its own console"));
+            return;
+        }
+        fujinet_log_show(this, m_session);
+    });
 
     QMenu *view = menuBar()->addMenu(QStringLiteral("&View"));
     view->addAction(QStringLiteral("&Debugger"), QKeySequence(Qt::Key_F12),
