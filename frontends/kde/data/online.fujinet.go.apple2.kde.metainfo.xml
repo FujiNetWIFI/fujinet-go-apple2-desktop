@@ -47,6 +47,13 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.0" date="2026-10-29">
+      <description>
+        <p>
+          New: use an external FujiNet. A switch in Preferences skips the built-in FujiNet and listens on an address:port you enter (for example 0.0.0.0:1985), so another FujiNet instance can connect to it.
+        </p>
+      </description>
+    </release>
     <release version="0.5.3" date="2026-10-27">
       <description>
         <p>

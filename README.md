@@ -22,6 +22,10 @@ follows.
 > installer and the macOS bundle and can cut a release. Still to come: code
 > signing for the macOS bundle. See `TODO`.
 
+## External FujiNet
+
+A switch in Preferences (Windows Apple II: `FujiNet ▸ Connection`) skips the built-in FujiNet and listens on an address:port you enter, e.g. `0.0.0.0:1985`; point the other FujiNet instance at it.
+
 ## Building
 
 ```sh
