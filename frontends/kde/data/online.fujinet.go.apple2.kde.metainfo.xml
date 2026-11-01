@@ -47,6 +47,13 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.0" date="2026-11-01">
+      <description>
+        <p>
+          Lower CPU use: the picture is drawn on the GPU (with a software fallback) only when the emulator has a new frame, and the display stops updating while the window is hidden. The built-in FujiNet wakes about a tenth as often when nothing is happening. Needs Qt 6.7 or newer.
+        </p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-10-29">
       <description>
         <p>
