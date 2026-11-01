@@ -31,7 +31,7 @@ target_link_libraries(fujinet-go-apple2-kde PRIVATE
   apple2session Qt6::Widgets Qt6::GuiPrivate)
 # The display's shaders, baked for every backend and embedded as resources.
 qt_add_shaders(fujinet-go-apple2-kde "display_shaders"
-  PREFIX "/shaders"
+  PREFIX "/"
   FILES shaders/display.vert shaders/display.frag)
 target_compile_options(fujinet-go-apple2-kde PRIVATE -Wall -Wextra)
 target_compile_definitions(fujinet-go-apple2-kde PRIVATE
