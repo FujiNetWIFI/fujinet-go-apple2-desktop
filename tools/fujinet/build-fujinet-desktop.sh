@@ -284,6 +284,14 @@ def patch(rel, transforms, required=True):
         text = text.replace(old, new, count)
     write_if_changed(p, text)
 
+# MSYS2's newer GCC rejects strncpy(dst, src, strlen(src) + 1) under -Wall -Werror
+# (-Wstringop-truncation) in libnfs's Windows shim, which breaks the Windows build;
+# memcpy copies the same bytes. Skipped once the firmware no longer has that line.
+_inet_pton = clone_dir / "components_pc/libnfs/win32/win32_compat.c"
+if _inet_pton.exists():
+    write_if_changed(_inet_pton, read_file(_inet_pton).replace(
+        "strncpy(srcNonConst, src, strLen);", "memcpy(srcNonConst, src, strLen);"))
+
 # --- build.sh: inject the embedded-build cmake args (getopts rejects any
 # --- pass-through -D flags, so they ride an environment variable) ---------
 patch("build.sh", [
