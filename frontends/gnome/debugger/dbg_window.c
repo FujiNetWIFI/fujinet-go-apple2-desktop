@@ -490,28 +490,52 @@ static void on_fuji_clear(GtkButton *b, gpointer user_data)
     refresh_fujinet(w, TRUE);
 }
 
+static void update_tick(DbgWindow *w, int page);
+
 static void on_switch_page(GtkNotebook *nb, GtkWidget *page, guint num,
                            gpointer user_data)
 {
     (void)nb; (void)page;
     if (num == TAB_FUJINET)
         refresh_fujinet(user_data, FALSE);
+    update_tick(user_data, (int)num);
 }
 
 /* The FujiNet tab is live: twice a second while it shows. */
 static gboolean on_tick(gpointer user_data)
 {
-    DbgWindow *w = user_data;
-    if (gtk_widget_get_visible(GTK_WIDGET(w->win)) &&
-        gtk_notebook_get_current_page(w->notebook) == TAB_FUJINET)
-        refresh_fujinet(w, FALSE);
+    refresh_fujinet(user_data, FALSE);
     return G_SOURCE_CONTINUE;
+}
+
+/* The timer runs only while the FujiNet tab is on screen: hidden window or
+ * another tab, no wakeups at all. */
+static void update_tick(DbgWindow *w, int page)
+{
+    gboolean want = gtk_widget_get_visible(GTK_WIDGET(w->win)) &&
+                    gtk_widget_get_mapped(GTK_WIDGET(w->win)) &&
+                    page == TAB_FUJINET;
+
+    if (want && !w->timer)
+        w->timer = g_timeout_add(500, on_tick, w);
+    else if (!want && w->timer) {
+        g_source_remove(w->timer);
+        w->timer = 0;
+    }
+}
+
+static void on_win_mapped(GObject *obj, GParamSpec *pspec, gpointer user_data)
+{
+    DbgWindow *w = user_data;
+    (void)obj; (void)pspec;
+    update_tick(w, gtk_notebook_get_current_page(w->notebook));
 }
 
 static void on_destroy(GtkWidget *widget, gpointer user_data)
 {
     DbgWindow *w = user_data;
     (void)widget;
+    g_signal_handlers_disconnect_by_data(w->win, w);
     if (w->timer) g_source_remove(w->timer);
     /* Leave the machine running, but stop calling into a freed window. */
     apple2debug_set_stop_callback(w->dbg, NULL, NULL);
@@ -780,7 +804,9 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
     }
     apple2debug_pause(w->dbg);
     refresh_all(w);
-    w->timer = g_timeout_add(500, on_tick, w);
+    g_signal_connect(w->win, "notify::visible", G_CALLBACK(on_win_mapped), w);
+    g_signal_connect(w->win, "map", G_CALLBACK(on_win_mapped), w);
+    g_signal_connect(w->win, "unmap", G_CALLBACK(on_win_mapped), w);
 
     gtk_window_present(w->win);
 }

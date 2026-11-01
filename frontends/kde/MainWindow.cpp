@@ -15,7 +15,9 @@
 #include <QMessageBox>
 #include <QStatusBar>
 
+#include "DisplayView.h"
 #include "DisplayWidget.h"
+#include "SoftDisplayWidget.h"
 #include "debugger/DebuggerWindow.h"
 #include "FujiNetWindows.h"
 #include "SettingsDialog.h"
@@ -30,13 +32,17 @@ MainWindow::MainWindow(apple2session *session, QWidget *parent)
     setWindowTitle(QStringLiteral("FujiNet Go Apple II"));
     resize(1120, 900);
 
-    m_display = new DisplayWidget(session, this);
-    setCentralWidget(m_display);
+    auto *gpu = new DisplayWidget(session, this);
+    m_display = gpu;
+    setCentralWidget(gpu);
+    /* No usable GPU device: fall back to painting in software */
+    connect(gpu, &QRhiWidget::renderFailed, this, &MainWindow::useSoftwareDisplay,
+            Qt::QueuedConnection);
     statusBar();
 
     buildMenus();
     applyDisplaySettings();
-    m_display->setFocus();
+    m_display->widget()->setFocus();
 
     /* Developer affordance: open the debugger alongside the main window,
      * which is what you want when the app dies before you reach a menu. */
@@ -53,9 +59,20 @@ void MainWindow::applyDisplaySettings()
 {
     m_display->setAspectMode(
         apple2session_get_int(m_session, "aspect_mode",
-                              DisplayWidget::AspectTv43));
+                              DisplayView::AspectTv43));
     m_display->setSmooth(
         apple2session_get_int(m_session, "smooth_scaling", 0));
+}
+
+void MainWindow::useSoftwareDisplay()
+{
+    if (dynamic_cast<SoftDisplayWidget *>(m_display))
+        return;
+    auto *soft = new SoftDisplayWidget(m_session, this);
+    m_display = soft;
+    setCentralWidget(soft);   /* deletes the GPU display, which stops its feed */
+    applyDisplaySettings();
+    soft->setFocus();
 }
 
 void MainWindow::restartSession()
@@ -168,7 +185,7 @@ void MainWindow::buildMenus()
             status(QStringLiteral("Machine options applied "
                                   "(session restarted)"));
         }
-        m_display->setFocus();
+        m_display->widget()->setFocus();
     });
 
     QMenu *help = menuBar()->addMenu(QStringLiteral("&Help"));

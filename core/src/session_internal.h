@@ -92,6 +92,13 @@ struct apple2session {
     int frame_w;
     int frame_h;
     uint64_t frame_serial;
+    /* Frames the machine has run (every retro_run, published or not), for
+     * "is it running" checks; and the frontend's new-frame callback, which
+     * runs under frame_cb_mtx so set(NULL) waits for a call in flight. */
+    uint64_t frames_run;
+    pthread_mutex_t frame_cb_mtx;
+    apple2session_frame_cb frame_cb;
+    void *frame_cb_ctx;
 
     /* ---- vsync phase-lock (UI tick -> emulator pacing) ---- */
     pthread_mutex_t vs_mtx;

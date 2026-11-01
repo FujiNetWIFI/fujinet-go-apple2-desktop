@@ -3,7 +3,7 @@
 # machines can still build the core / KDE side.
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(ADW IMPORTED_TARGET libadwaita-1>=1.4 gtk4>=4.10)
+pkg_check_modules(ADW IMPORTED_TARGET libadwaita-1>=1.4 gtk4>=4.16)
 
 if(NOT ADW_FOUND)
   message(STATUS "GNOME frontend: libadwaita/gtk4 not found -- skipping")

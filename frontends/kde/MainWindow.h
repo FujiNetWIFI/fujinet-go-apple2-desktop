@@ -9,7 +9,7 @@
 
 #include "apple2session.h"
 
-class DisplayWidget;
+class DisplayView;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -20,10 +20,11 @@ private:
     void buildMenus();
     void applyDisplaySettings();
     void restartSession();
+    void useSoftwareDisplay();
     void importDiskImage();
     void importSystemRoms();
     void status(const QString &message);
 
     apple2session *m_session;
-    DisplayWidget *m_display;
+    DisplayView *m_display;
 };

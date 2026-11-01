@@ -3,7 +3,8 @@
 # frontend reusable (and the future Windows port clean). Found-or-skipped so
 # a machine without Qt can still build the core and the GNOME side.
 
-find_package(Qt6 6.4 COMPONENTS Widgets OpenGLWidgets QUIET)
+# Qt 6.7 for QRhiWidget (the GPU display); ShaderTools bakes its shaders.
+find_package(Qt6 6.7 COMPONENTS Widgets GuiPrivate ShaderTools QUIET)
 
 if(NOT Qt6_FOUND)
   message(STATUS "KDE frontend: Qt6 Widgets not found -- skipping")
@@ -18,13 +19,20 @@ add_executable(fujinet-go-apple2-kde
   main.cpp
   MainWindow.cpp
   DisplayWidget.cpp
+  SoftDisplayWidget.cpp
+  FrameFeed.cpp
+  KeyForward.cpp
   SettingsDialog.cpp
   FujiNetWindows.cpp
   debugger/DebuggerWindow.cpp
 )
 
 target_link_libraries(fujinet-go-apple2-kde PRIVATE
-  apple2session Qt6::Widgets Qt6::OpenGLWidgets)
+  apple2session Qt6::Widgets Qt6::GuiPrivate)
+# The display's shaders, baked for every backend and embedded as resources.
+qt_add_shaders(fujinet-go-apple2-kde "display_shaders"
+  PREFIX "/shaders"
+  FILES shaders/display.vert shaders/display.frag)
 target_compile_options(fujinet-go-apple2-kde PRIVATE -Wall -Wextra)
 target_compile_definitions(fujinet-go-apple2-kde PRIVATE
   APPLE2_ICON_FILE="${CMAKE_SOURCE_DIR}/data/icons/hicolor/256x256/apps/fujinet-go-apple2.png")

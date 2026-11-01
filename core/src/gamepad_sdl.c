@@ -124,6 +124,7 @@ static void *gamepad_thread_main(void *arg)
     apple2session *s = arg;
     gamepad_state *g = s->gamepad;
     int tick = 0;
+    int idle = 1;   /* no pad attached: poll slowly, only hotplug to notice */
 
     apple2_thread_setname("apple2-gamepad");
     while (g->run) {
@@ -131,7 +132,7 @@ static void *gamepad_thread_main(void *arg)
         SDL_UpdateGamepads();
         /* Device add/remove is rare; re-enumerate at ~4Hz, poll state at
          * ~125Hz. Flush the (unused) event queue so it can't grow. */
-        if (tick++ % 32 == 0)
+        if (tick++ % (idle ? 3 : 32) == 0)
             sync_devices(s, g);
         SDL_PumpEvents();
         SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
@@ -162,8 +163,13 @@ static void *gamepad_thread_main(void *arg)
                 pthread_mutex_lock(&g->mtx);
             }
         }
+        idle = g->count == 0;
         pthread_mutex_unlock(&g->mtx);
-        SDL_Delay(8);
+        /* ~125Hz while a pad is attached; with none there are no sticks to
+         * sample, so 10 wakeups a second (hotplug is still seen within
+         * 300 ms). SDL_WaitEventTimeout is no help: SDL polls inside it at
+         * about 1 kHz. */
+        SDL_Delay(idle ? 100 : 8);
     }
     return NULL;
 }

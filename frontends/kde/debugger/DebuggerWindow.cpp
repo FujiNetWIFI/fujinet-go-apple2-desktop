@@ -148,11 +148,32 @@ DebuggerWindow::DebuggerWindow(apple2session *session, QWidget *parent)
 
     /* The FujiNet tab is live: twice a second while it shows. */
     m_tick = new QTimer(this);
-    connect(m_tick, &QTimer::timeout, this, [this] {
-        if (isVisible() && m_tabs->currentIndex() == kTabFujinet)
-            refreshFujinet(false);
-    });
-    m_tick->start(500);
+    connect(m_tick, &QTimer::timeout, this, [this] { refreshFujinet(false); });
+    updateTick();
+}
+
+/* The timer runs only while the FujiNet tab is on screen: hidden window or
+ * another tab, no wakeups at all. */
+void DebuggerWindow::updateTick()
+{
+    const bool want = isVisible() && !isMinimized() &&
+                      m_tabs->currentIndex() == kTabFujinet;
+    if (want && !m_tick->isActive())
+        m_tick->start(500);
+    else if (!want && m_tick->isActive())
+        m_tick->stop();
+}
+
+void DebuggerWindow::showEvent(QShowEvent *e)
+{
+    QMainWindow::showEvent(e);
+    updateTick();
+}
+
+void DebuggerWindow::hideEvent(QHideEvent *e)
+{
+    QMainWindow::hideEvent(e);
+    updateTick();
 }
 
 DebuggerWindow::~DebuggerWindow()
@@ -322,6 +343,7 @@ void DebuggerWindow::buildUi()
         m_tabs->setCurrentIndex(tab);
     connect(m_tabs, &QTabWidget::currentChanged, this, [this](int page) {
         if (page == kTabFujinet) refreshFujinet(false);
+        updateTick();
     });
     setCentralWidget(m_tabs);
 

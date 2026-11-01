@@ -35,8 +35,13 @@ public slots:
      * nothing here may be called directly from that callback. */
     void onStopped(int reason, unsigned pc);
 
+protected:
+    void showEvent(QShowEvent *e) override;
+    void hideEvent(QHideEvent *e) override;
+
 private:
     void buildUi();
+    void updateTick();
     void renderRegs();
     void renderDisasm();
     void renderMem();

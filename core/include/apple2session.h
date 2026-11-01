@@ -141,6 +141,20 @@ const char *apple2session_last_error(const apple2session *s);
 int  apple2session_copy_frame(apple2session *s, uint32_t *dst,
                               uint64_t *serial_inout, int *w_out, int *h_out);
 
+/* Ask to be told when a new frame is ready, for a frontend with no frame
+ * clock of its own: cb(ctx) runs on the emulator thread after a changed frame
+ * is stored. Keep it quick (post an event and return) and do not call into
+ * the session from it. Passing NULL stops the calls, and returns only after
+ * any call in flight has finished, so ctx may be freed right after. */
+typedef void (*apple2session_frame_cb)(void *ctx);
+void apple2session_set_frame_callback(apple2session *s, apple2session_frame_cb cb,
+                                      void *ctx);
+/* Frames the machine has run since it started. Unlike copy_frame's serial it
+ * counts every frame, including the ones identical to their predecessor
+ * (which are not published): use it to ask "is the machine running", not "is
+ * the picture changing". */
+uint64_t apple2session_frame_count(apple2session *s);
+
 /* Feed the UI's vsync ticks (frame-clock time, CLOCK_MONOTONIC ns). While a
  * steady ~60Hz tick stream arrives, the emulator phase-locks one emulated
  * frame per tick; otherwise it paces on the wall clock at the core's declared

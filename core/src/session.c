@@ -230,6 +230,25 @@ static void on_core_frame(const uint32_t *px, int w, int h, void *user)
     s->frame_h = h;
     s->frame_serial++;
     pthread_mutex_unlock(&s->frame_mtx);
+
+    pthread_mutex_lock(&s->frame_cb_mtx);
+    if (s->frame_cb)
+        s->frame_cb(s->frame_cb_ctx);
+    pthread_mutex_unlock(&s->frame_cb_mtx);
+}
+
+void apple2session_set_frame_callback(apple2session *s, apple2session_frame_cb cb,
+                                      void *ctx)
+{
+    pthread_mutex_lock(&s->frame_cb_mtx);
+    s->frame_cb = cb;
+    s->frame_cb_ctx = ctx;
+    pthread_mutex_unlock(&s->frame_cb_mtx);
+}
+
+uint64_t apple2session_frame_count(apple2session *s)
+{
+    return __atomic_load_n(&s->frames_run, __ATOMIC_RELAXED);
 }
 
 /* The SmartPort card's packets, for the debugger's FujiNet tab. Called on the
@@ -359,6 +378,7 @@ static void *emu_thread_main(void *arg)
             apple2debug_session_frame(s);
         else
             apple2host_core_run_frame();
+        __atomic_fetch_add(&s->frames_run, 1, __ATOMIC_RELAXED);
 
         /* An external FujiNet connects whenever it likes. The built-in one is
          * cold-booted into (apple2session_start); here the first link-up soon
@@ -448,6 +468,7 @@ apple2session *apple2session_new(const apple2session_paths *paths)
 
     pthread_mutex_init(&s->lifecycle_mtx, NULL);
     pthread_mutex_init(&s->frame_mtx, NULL);
+    pthread_mutex_init(&s->frame_cb_mtx, NULL);
     pthread_mutex_init(&s->vs_mtx, NULL);
     pthread_mutex_init(&s->start_mtx, NULL);
     apple2_cond_init_monotonic(&s->vs_cv);
@@ -467,6 +488,7 @@ void apple2session_free(apple2session *s)
     sptrace_free(s->sptrace);
     pthread_mutex_destroy(&s->lifecycle_mtx);
     pthread_mutex_destroy(&s->frame_mtx);
+    pthread_mutex_destroy(&s->frame_cb_mtx);
     pthread_mutex_destroy(&s->vs_mtx);
     pthread_mutex_destroy(&s->start_mtx);
     pthread_cond_destroy(&s->vs_cv);
@@ -573,6 +595,7 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
     s->reset_request = 0;
     s->link_reboot = s->fujinet_external;
     s->frame_serial = 0;
+    __atomic_store_n(&s->frames_run, 0, __ATOMIC_RELAXED);
     s->frame_w = 0;
     s->frame_h = 0;
     s->vs_ns = 0;
