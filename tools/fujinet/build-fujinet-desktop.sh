@@ -413,6 +413,19 @@ patch("lib/http/mgHttpClient.cpp", [
 # is first attempted, and add them here. Send them upstream rather than
 # carrying them.
 
+# --- compiler warnings are not fatal in the embedded build ----------------
+patch("fujinet_pc.cmake", [
+    # The firmware builds its bundled libraries (libsmb2, libnfs, ...) with
+    # -Werror, so a newer compiler's new warning in code that is not ours
+    # fails the whole runtime build. Warnings stay, they just are not fatal.
+    (
+        'add_compile_options(-Werror)\n',
+        'if(NOT FUJINET_EMBEDDED)\n'
+        '    add_compile_options(-Werror)\n'
+        'endif()\n',
+    ),
+])
+
 # --- dist target: no ldd DLL harvesting for the embedded Windows build ----
 # The stock Windows "dist" target copies the executable's dependent DLLs by
 # parsing ldd output. The embedded library links its runtimes statically and
