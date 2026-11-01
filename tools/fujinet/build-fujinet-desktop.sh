@@ -812,7 +812,9 @@ fi
 
 (
     cd "${CLONE_DIR}"
-    FUJINET_EMBEDDED=1 bash ./build.sh "${BUILD_FLAGS}" "${PC_TARGET}"
+    # -y: build.sh's prerequisite check installs a missing pyyaml/Jinja2 into
+    # the venv instead of stopping to ask (there is nobody to ask in CI).
+    FUJINET_EMBEDDED=1 bash ./build.sh -y "${BUILD_FLAGS}" "${PC_TARGET}"
 )
 
 printf '%s' "${TARGET_KEY}" > "${TARGET_KEY_FILE}"
