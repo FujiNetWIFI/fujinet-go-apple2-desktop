@@ -24,8 +24,12 @@ find_package(Git QUIET)
 # that the FujiNet link depends on, which upstream does not have.
 set(APPLEWIN_COMMIT "25e8ddd139f9ebe02c55e94463e8b876ddd1afc1")
 set(APPLEWIN_URL "https://github.com/FujiNetWIFI/AppleWin")
-set(FUJINET_COMMIT "13465cdd044304ff96ad41a5f029087b28bed17f")
-set(FUJINET_URL "https://github.com/FujiNetWIFI/fujinet-firmware")
+# FujiNet pin: 13465cdd0 + the BoIP idle-wait fix (fujinet-firmware PR #2247,
+# = master f703133d0 + the fix). Temporary: move back to master when #2247
+# merges. The fork URL is used because the commit is a PR head, which a plain
+# upstream clone does not contain (the submodule fetches it by SHA).
+set(FUJINET_COMMIT "0c9f00c16dff62d2b3c6b08821322f50642594db")
+set(FUJINET_URL "https://github.com/tschak909/fujinet-firmware")
 
 # apple2_provide_dependency(NAME <n> PATH <p> URL <u> COMMIT <sha>
 #                           SENTINEL <file> OVERRIDE <VAR> RESULT <out>)
