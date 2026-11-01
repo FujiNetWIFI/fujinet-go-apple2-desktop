@@ -38,27 +38,35 @@ on:
   pull_request:
 
 jobs:
+  # An Arch container, not ubuntu: the frontends need Qt >= 6.7 (QRhiWidget,
+  # the GPU display) and GTK >= 4.16 (GdkMemoryTextureBuilder), and
+  # ubuntu-24.04 ships Qt 6.4 and GTK 4.14. A frontend whose toolkit is too
+  # old is skipped by CMake, so on the old image this job would go green
+  # having built nothing. The release packages are built on ubuntu-26.04
+  # (linux-packages below), which has what they need and dpkg-deb.
   linux:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    env:
+      LD_LIBRARY_PATH: /usr/local/lib
     steps:
-      - uses: actions/checkout@v5
-      - name: Install toolkit dependencies
+      - name: Install build tools and toolkit dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build libgtk-4-dev libadwaita-1-dev \
-            libwebkitgtk-6.0-dev qt6-base-dev qt6-webengine-dev \
-            libssl-dev libexpat1-dev zlib1g-dev libkrb5-dev libgnutls28-dev \
-            libboost-dev python3-venv python3-yaml python3-jinja2 \
-            desktop-file-utils
+          pacman -Syu --noconfirm --needed \
+            base-devel cmake ninja python pkgconf git \
+            gtk4 libadwaita webkitgtk-6.0 qt6-base qt6-shadertools \
+            qt6-webengine openssl expat zlib krb5 gnutls boost \
+            python-yaml python-jinja desktop-file-utils
+      - uses: actions/checkout@v5
       # SDL 3.4 aborts its configure when an X11 extension it enables by
       # default has no headers (3.2 quietly disabled them), so name the whole
-      # set rather than depend on what the runner image happens to ship.
+      # set rather than depend on what the image happens to ship.
       - name: Install SDL3 build dependencies
         run: |
-          sudo apt-get install -y libx11-dev libxext-dev libxcursor-dev \
-            libxi-dev libxfixes-dev libxrandr-dev libxss-dev libxtst-dev \
-            libxkbcommon-dev libwayland-dev libdecor-0-dev libasound2-dev \
-            libpulse-dev libudev-dev libdbus-1-dev
+          pacman -S --noconfirm --needed \
+            libx11 libxext libxcursor libxi libxfixes libxrandr libxss \
+            libxtst libxkbcommon wayland wayland-protocols libdecor \
+            alsa-lib libpulse systemd-libs dbus libdrm mesa
       - name: Build and install SDL3
         run: |
           git clone --depth 1 --branch release-3.4.12 \
@@ -66,10 +74,10 @@ jobs:
           cmake -S sdl3-src -B sdl3-src/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF
           cmake --build sdl3-src/build
-          sudo cmake --install sdl3-src/build
+          cmake --install sdl3-src/build
       # No dependency preparation: this is the plain user path. The build
       # fetches AppleWin + the FujiNet firmware and builds libfujinet.so.
-      # (Ubuntu's mbedTLS is 2.x, so the FujiNet build compiles the pinned
+      # (Arch's mbedTLS is 4.x, so the FujiNet build compiles the pinned
       # 3.6.5 for itself.)
       - name: Configure
         run: cmake -B build -G Ninja
@@ -125,17 +133,22 @@ jobs:
       fail-fast: false
       matrix:
         frontend: [gnome, kde]
-    runs-on: ubuntu-24.04
+    # ubuntu-26.04, not 24.04: the frontends need Qt >= 6.7 and GTK >= 4.16
+    # (26.04 has Qt 6.10 and GTK 4.22; 24.04 has 6.4 and 4.14, and CMake would
+    # refuse the frontend named below). The .deb/.rpm therefore need a distro
+    # at least that new.
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
       - name: Install toolkit dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libgtk-4-dev libadwaita-1-dev \
-            libwebkitgtk-6.0-dev qt6-base-dev qt6-webengine-dev \
+            libwebkitgtk-6.0-dev qt6-base-dev qt6-base-private-dev \
+            qt6-shadertools-dev qt6-webengine-dev \
             libssl-dev libexpat1-dev zlib1g-dev libkrb5-dev libgnutls28-dev \
             libboost-dev python3-venv python3-yaml python3-jinja2 \
-            desktop-file-utils dpkg-dev rpm
+            desktop-file-utils dpkg-dev rpm file
       - name: Install SDL3 build dependencies
         run: |
           sudo apt-get install -y libx11-dev libxext-dev libxcursor-dev \
