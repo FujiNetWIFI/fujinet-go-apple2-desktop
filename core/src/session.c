@@ -933,11 +933,21 @@ apple2debug *apple2session_debugger(apple2session *s)
 /** Media import                                                           **/
 /****************************************************************************/
 
+/* The file name part of a path. Windows file dialogs return "C:\dir\f.dsk",
+ * so a backslash separates just as a slash does (issue #1). */
+static const char *path_base(const char *path)
+{
+    const char *base = path, *p;
+    for (p = path; *p; p++)
+        if (*p == '/' || *p == '\\') base = p + 1;
+    return base;
+}
+
 static const char *path_ext(const char *path)
 {
-    const char *dot = strrchr(path, '.');
-    const char *slash = strrchr(path, '/');
-    if (!dot || (slash && dot < slash)) return "";
+    const char *base = path_base(path);
+    const char *dot = strrchr(base, '.');
+    if (!dot) return "";
     return dot + 1;
 }
 
@@ -951,10 +961,9 @@ static int ext_is(const char *ext, const char *want)
 int apple2session_import_rom(apple2session *s, const char *src_path,
                             char *dest_out, int dest_sz)
 {
-    const char *base = strrchr(src_path, '/');
+    const char *base = path_base(src_path);
     char dst[APPLE2_PATH_MAX];
 
-    base = base ? base + 1 : src_path;
     if (!*base) {
         session_set_error(s, "Not a file: %s", src_path);
         return -1;
@@ -978,11 +987,10 @@ int apple2session_import_media(apple2session *s, const char *src_path,
         "dsk", "do", "po", "2mg", "nib", "woz", "hdv", NULL
     };
     const char *ext = path_ext(src_path);
-    const char *base = strrchr(src_path, '/');
+    const char *base = path_base(src_path);
     char dst[APPLE2_PATH_MAX];
     int i, ok = 0;
 
-    base = base ? base + 1 : src_path;
     for (i = 0; k_disk_exts[i]; i++) {
         if (ext_is(ext, k_disk_exts[i])) { ok = 1; break; }
     }

@@ -250,6 +250,10 @@ target_link_libraries(input_test apple2session)
 add_executable(hostport_test tests/hostport_test.c)
 target_link_libraries(hostport_test apple2session)
 
+add_executable(import_test tests/import_test.c)
+target_link_libraries(import_test apple2session)
+target_include_directories(import_test PRIVATE src)
+
 add_executable(boot_smoke tests/boot_smoke.c)
 target_link_libraries(boot_smoke apple2session)
 
@@ -274,6 +278,7 @@ add_test(NAME input COMMAND input_test)
 add_test(NAME hostport COMMAND hostport_test)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME sptrace COMMAND sptrace_test)
+add_test(NAME import COMMAND import_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME debug_seam COMMAND debug_seam_test)
 add_test(NAME debug_engine COMMAND debug_engine_test)
