@@ -48,6 +48,13 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.8.0" date="2026-11-08">
+      <description>
+        <p>
+          Built-in, searchable Help: Help menu (Ctrl+Shift+H, ⌘? on a Mac) and Help buttons in Preferences, the debugger and the console log open the topic for what they show.
+        </p>
+      </description>
+    </release>
     <release version="0.7.1" date="2026-11-07">
       <description>
         <p>
