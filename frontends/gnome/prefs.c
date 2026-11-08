@@ -16,6 +16,7 @@
 #include "prefs.h"
 
 #include "window.h"
+#include "help/help_window.h"
 
 static const char *const aspect_names[] = {"TV (4:3)", "Square pixels",
                                            "Integer scale", NULL};
@@ -290,6 +291,7 @@ void apple2_prefs_show(Apple2Window *parent, apple2session *session,
     state->display_changed = display_changed;
 
     adw_preferences_group_set_title(machine, "Machine");
+    adw_preferences_group_set_header_suffix(machine, apple2_help_button("prefs/Machine"));
     adw_preferences_group_set_description(
         machine, "Applied by restarting the session when this dialog closes");
     adw_preferences_group_add(
@@ -318,7 +320,9 @@ void apple2_prefs_show(Apple2Window *parent, apple2session *session,
         slots, combo_row_str(state, "Slot 7", "slot7", slot7_table(),
                              "FujiNet"));
 
+    adw_preferences_page_set_name(page, "Machine");
     adw_preferences_group_set_title(fujinet, "FujiNet");
+    adw_preferences_group_set_header_suffix(fujinet, apple2_help_button("prefs/FujiNet"));
     adw_preferences_group_set_description(
         fujinet,
         "Skip the built-in FujiNet and wait for another instance to connect "

@@ -10,6 +10,8 @@
 #include "webview.h"
 #include <string.h>
 
+#include "help/help_window.h"
+
 #ifdef HAVE_WEBKIT
 #include <webkit/webkit.h>
 #endif
@@ -128,6 +130,16 @@ static void log_destroyed(GtkWidget *win, gpointer user_data)
     g_free(st);
 }
 
+static gboolean log_on_key(GtkEventControllerKey *c, guint keyval, guint code,
+                           GdkModifierType st, gpointer ud)
+{
+    (void)c; (void)code; (void)st;
+    if (keyval != GDK_KEY_F1)
+        return FALSE;
+    apple2_help_for(ud);
+    return TRUE;
+}
+
 void apple2_fujinet_log_show(GtkWindow *parent, apple2session *session)
 {
     static GtkWindow *win;
@@ -152,8 +164,15 @@ void apple2_fujinet_log_show(GtkWindow *parent, apple2session *session)
     scroll = gtk_scrolled_window_new();
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), view);
     tbview = adw_toolbar_view_new();
-    adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(tbview),
-                                 adw_header_bar_new());
+    {
+        GtkWidget *header = adw_header_bar_new();
+        GtkEventController *keys = gtk_event_controller_key_new();
+        adw_header_bar_pack_end(ADW_HEADER_BAR(header), apple2_help_button("fujilog"));
+        apple2_help_set_context(win, "fujilog");
+        g_signal_connect(keys, "key-pressed", G_CALLBACK(log_on_key), win);
+        gtk_widget_add_controller(GTK_WIDGET(win), keys);
+        adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(tbview), header);
+    }
     adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(tbview), scroll);
     adw_window_set_content(ADW_WINDOW(win), tbview);
 

@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "apple2debug.h"
+#include "../help/help_window.h"
 
 #define DISASM_LINES 24
 /* 16 columns, where the GNOME and KDE windows use 8. Those two are sized by
@@ -45,7 +46,7 @@
 #define TIMER_REFRESH 1
 
 enum {
-    IDC_PAUSE = 1000, IDC_STEP_IN, IDC_STEP_OVER, IDC_STEP_OUT,
+    IDC_PAUSE = 1000, IDC_STEP_IN, IDC_STEP_OVER, IDC_STEP_OUT, IDC_HELP_BTN,
     IDC_STATUS, IDC_DISASM, IDC_REGS, IDC_REG_LABEL,
     IDC_MEM_LABEL, IDC_MEM_ADDR, IDC_MEM_VIEW,
     IDC_VIEW_PICK, IDC_VIEW_PIC,
@@ -62,7 +63,7 @@ static const char *const k_tab_labels[TAB_COUNT] = { "CPU", "FujiNet" };
 
 typedef struct {
     HWND hwnd;
-    HWND pause_btn, step_in, step_over, step_out, status;
+    HWND pause_btn, step_in, step_over, step_out, help_btn, status;
     HWND disasm;
     HWND reg_label, regs;
     HWND mem_label, mem_addr, mem_view;
@@ -546,6 +547,7 @@ static void build_controls(debugger *d)
                          IDC_STEP_OVER);
     d->step_out = child(d, "BUTTON", "Out (Shift+F8)", BS_PUSHBUTTON,
                         IDC_STEP_OUT);
+    d->help_btn = child(d, "BUTTON", "Help", BS_PUSHBUTTON, IDC_HELP_BTN);
     d->status = child(d, "STATIC", "Running", SS_LEFT, IDC_STATUS);
 
     /* A list box, so a click resolves to a row directly. Its tooltip lives in
@@ -596,6 +598,9 @@ static void build_controls(debugger *d)
     d->fuji_count = -1;
 }
 
+/* Help's contexts (apple2help.h), one per tab */
+static const char *const k_tab_contexts[] = { "debugger/cpu", "debugger/fujinet" };
+
 static void show_page(debugger *d, int page)
 {
     HWND cpu[] = { d->disasm, d->reg_label, d->regs, d->mem_label, d->mem_addr,
@@ -604,6 +609,9 @@ static void show_page(debugger *d, int page)
                     d->card_title, d->card_text };
     size_t i;
     d->page = page;
+    /* Help, F1 and Ctrl+Shift+H open the tab's section */
+    if (page >= 0 && page < (int)(sizeof k_tab_contexts / sizeof k_tab_contexts[0]))
+        apple2_help_set_context(d->hwnd, k_tab_contexts[page], 1);
     for (i = 0; i < sizeof cpu / sizeof cpu[0]; i++)
         ShowWindow(cpu[i], page == TAB_CPU ? SW_SHOW : SW_HIDE);
     for (i = 0; i < sizeof fuji / sizeof fuji[0]; i++)
@@ -638,7 +646,8 @@ static void layout(debugger *d)
     MoveWindow(d->step_in, bx, y, 100, 26, TRUE);        bx += 106;
     MoveWindow(d->step_over, bx, y, 100, 26, TRUE);      bx += 106;
     MoveWindow(d->step_out, bx, y, 130, 26, TRUE);       bx += 138;
-    MoveWindow(d->status, bx, y + 5, client.right - bx - 8, 20, TRUE);
+    MoveWindow(d->help_btn, bx, y, 70, 26, TRUE);        bx += 78;
+    MoveWindow(d->status, bx, y + 5, client.right - bx - 8 > 40 ? client.right - bx - 8 : 40, 20, TRUE);
 
     /* The tab control is the strip alone: the pages sit on the window's own
      * background below it. */
@@ -749,6 +758,7 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case IDC_PAUSE:     toggle_run(d); return 0;
+        case IDC_HELP_BTN:  apple2_help_for(d->hwnd); return 0;
         case IDC_STEP_IN:   if (d->dbg) apple2debug_step_into(d->dbg); return 0;
         case IDC_STEP_OVER: if (d->dbg) apple2debug_step_over(d->dbg); return 0;
         case IDC_STEP_OUT:  if (d->dbg) apple2debug_step_out(d->dbg); return 0;

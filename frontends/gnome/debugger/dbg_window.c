@@ -18,6 +18,7 @@
  */
 
 #include "dbg_window.h"
+#include "../help/help_window.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -465,6 +466,9 @@ static gboolean on_key(GtkEventControllerKey *c, guint keyval, guint code,
     (void)code;
 
     switch (keyval) {
+    case GDK_KEY_F1:
+        apple2_help_for(w->win);
+        return TRUE;
     case GDK_KEY_F5:
         act_run(NULL, w);
         return TRUE;
@@ -492,10 +496,16 @@ static void on_fuji_clear(GtkButton *b, gpointer user_data)
 
 static void update_tick(DbgWindow *w, int page);
 
+/* Help's contexts (apple2help.h), one per tab */
+static const char *const k_tab_contexts[] = { "debugger/cpu", "debugger/fujinet" };
+
 static void on_switch_page(GtkNotebook *nb, GtkWidget *page, guint num,
                            gpointer user_data)
 {
+    DbgWindow *hw = user_data;
     (void)nb; (void)page;
+    if (num < G_N_ELEMENTS(k_tab_contexts))
+        apple2_help_set_context(hw->win, k_tab_contexts[num]);
     if (num == TAB_FUJINET)
         refresh_fujinet(user_data, FALSE);
     update_tick(user_data, (int)num);
@@ -675,6 +685,7 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
         tool_button("Out", "Step out (Shift+F8)", G_CALLBACK(act_step_out), w));
 
     w->status = GTK_LABEL(gtk_label_new("Running"));
+    adw_header_bar_pack_end(ADW_HEADER_BAR(header), apple2_help_button(NULL));
     adw_header_bar_pack_end(ADW_HEADER_BAR(header), GTK_WIDGET(w->status));
 
     /* Disassembly on the left, registers and memory on the right. */
@@ -774,6 +785,10 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
     tab = tab_from_env();
     if (tab >= 0) gtk_notebook_set_current_page(w->notebook, tab);
     g_signal_connect(w->notebook, "switch-page", G_CALLBACK(on_switch_page), w);
+    {
+        int cur = gtk_notebook_get_current_page(w->notebook);
+        apple2_help_set_context(w->win, k_tab_contexts[cur > 0 && cur < 2 ? cur : 0]);
+    }
 
     tbview = adw_toolbar_view_new();
     adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(tbview), header);

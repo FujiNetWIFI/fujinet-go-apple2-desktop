@@ -9,6 +9,7 @@
  */
 
 #include "SettingsDialog.h"
+#include "help/HelpWindow.h"
 
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -16,6 +17,7 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QMessageBox>
+#include <QShortcut>
 #include <QVBoxLayout>
 
 void SettingsDialog::done(int result)
@@ -172,7 +174,12 @@ SettingsDialog::SettingsDialog(apple2session *session, QWidget *parent)
     displayForm->addRow(QStringLiteral("Scanlines"), scanlines);
     outer->addWidget(displayBox);
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    /* Help, F1 and Ctrl+Shift+H (the app's shortcuts don't reach a modal dialog) */
+    setProperty("apple2HelpContext", QStringLiteral("prefs/Machine"));
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close | QDialogButtonBox::Help, this);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::helpRequested, this, [this] { apple2HelpFor(this); });
+    for (const char *key : { "F1", "Ctrl+Shift+H" })
+        new QShortcut(QKeySequence(QString::fromLatin1(key)), this, [this] { apple2HelpFor(this); });
     outer->addWidget(buttons);
 }

@@ -15,7 +15,8 @@
     <p>
       Emulation is provided by AppleWin, with FujiNet attached as a SmartPort
       card in slot 7 -- the slot the Apple //e autostart ROM scans before the
-      Disk ][, so the machine boots straight into FujiNet's CONFIG.
+      Disk ][, so the machine boots straight into FujiNet's CONFIG. Built-in,
+      searchable Help covers all of it.
     </p>
   </description>
   <launchable type="desktop-id">online.fujinet.go.apple2.kde.desktop</launchable>

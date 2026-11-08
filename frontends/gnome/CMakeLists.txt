@@ -16,6 +16,7 @@ set(GNOME_SOURCES
   display.c
   prefs.c
   webview.c
+  help/help_window.c
   debugger/dbg_window.c
 )
 

@@ -24,6 +24,7 @@ add_executable(fujinet-go-apple2-kde
   KeyForward.cpp
   SettingsDialog.cpp
   FujiNetWindows.cpp
+  help/HelpWindow.cpp
   debugger/DebuggerWindow.cpp
 )
 

@@ -18,6 +18,7 @@
  */
 
 #include "DebuggerWindow.h"
+#include "../help/HelpWindow.h"
 
 #include <QFormLayout>
 #include <QGroupBox>
@@ -210,6 +211,7 @@ void DebuggerWindow::buildUi()
             apple2debug_step_over);
     addStep(QStringLiteral("Out"), QStringLiteral("Step out (Shift+F8)"),
             apple2debug_step_out);
+    tb->addWidget(apple2HelpButton(QString()));
 
     m_status = new QLabel(QStringLiteral("Running"), this);
     statusBar()->addPermanentWidget(m_status);
@@ -341,7 +343,15 @@ void DebuggerWindow::buildUi()
     m_tabs->addTab(buildFujinet(), QStringLiteral("FujiNet"));
     if (const int tab = tabFromEnv(); tab >= 0)
         m_tabs->setCurrentIndex(tab);
-    connect(m_tabs, &QTabWidget::currentChanged, this, [this](int page) {
+    /* Help's contexts (apple2help.h), one per tab */
+    auto setHelpContext = [this](int page) {
+        setProperty("apple2HelpContext", page == kTabFujinet ? QStringLiteral("debugger/fujinet")
+                                                             : QStringLiteral("debugger/cpu"));
+    };
+    setHelpContext(m_tabs->currentIndex());
+    new QShortcut(QKeySequence(Qt::Key_F1), this, [this] { apple2HelpFor(this); });
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this, setHelpContext](int page) {
+        setHelpContext(page);
         if (page == kTabFujinet) refreshFujinet(false);
         updateTick();
     });

@@ -9,6 +9,7 @@
  */
 
 #include "window.h"
+#include "help/help_window.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -75,6 +76,26 @@ static gboolean forward_key(Apple2Window *self, guint keyval,
     return TRUE;
 }
 
+/* The Help context the main window shows now: "main", or "prefs/Machine"
+ * while Preferences are open. */
+const char *apple2_window_help_context(Apple2Window *self)
+{
+    AdwDialog *d = adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(self));
+    return d && ADW_IS_PREFERENCES_DIALOG(d) ? "prefs/Machine" : "main";
+}
+
+/* app.help: every window's Ctrl+Shift+H, for what it shows. Not a cast of
+ * the active window: it can be the debugger or the log. */
+static void action_help(GSimpleAction *a, GVariant *p, gpointer user_data)
+{
+    (void)a; (void)p;
+    apple2_help_for(gtk_application_get_active_window(GTK_APPLICATION(user_data)));
+}
+
+static const GActionEntry app_actions[] = {
+    { "help", action_help, NULL, NULL, NULL, { 0 } },
+};
+
 static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
                                guint keycode, GdkModifierType state,
                                gpointer user_data)
@@ -82,6 +103,14 @@ static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
     Apple2Window *self = APPLE2_WINDOW(user_data);
     (void)controller;
     (void)keycode;
+
+    /* F1 is an APPLE2 function key in the window itself, and Help while
+     * Preferences or another dialog is open */
+    if (keyval == GDK_KEY_F1 && adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(self)) &&
+        !(state & GDK_MODIFIER_MASK & ~GDK_LOCK_MASK)) {
+        apple2_help_for(GTK_WINDOW(self));
+        return TRUE;
+    }
 
     switch (keyval) {
     case GDK_KEY_F10: /* open the primary menu */
@@ -333,6 +362,7 @@ static GMenu *build_menu(void)
     g_menu_append_section(menu, "View", G_MENU_MODEL(view));
 
     g_menu_append(tail, "Preferences…", "win.preferences");
+    g_menu_append(tail, "FujiNet Go Apple II Help", "app.help");
     g_menu_append(tail, "About FujiNet Go Apple II", "win.about");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(tail));
 
@@ -383,6 +413,13 @@ GtkWidget *apple2_window_new(AdwApplication *app, apple2session *session)
 
     g_action_map_add_action_entries(G_ACTION_MAP(self), win_actions,
                                     G_N_ELEMENTS(win_actions), self);
+    if (!g_action_map_lookup_action(G_ACTION_MAP(app), "help"))
+        g_action_map_add_action_entries(G_ACTION_MAP(app), app_actions,
+                                        G_N_ELEMENTS(app_actions), app);
+    {
+        static const char *const help_accels[] = { "<Control><Shift>h", NULL };
+        gtk_application_set_accels_for_action(GTK_APPLICATION(app), "app.help", help_accels);
+    }
 
     header = ADW_HEADER_BAR(adw_header_bar_new());
     self->menu_button = GTK_MENU_BUTTON(gtk_menu_button_new());

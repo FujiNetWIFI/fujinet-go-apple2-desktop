@@ -12,6 +12,7 @@ add_executable(fujinet-go-apple2-macos MACOSX_BUNDLE
   main.m
   AppDelegate.m
   DisplayView.m
+  help/HelpWindow.m
   debugger/DebuggerWindow.m
 )
 set_target_properties(fujinet-go-apple2-macos PROPERTIES

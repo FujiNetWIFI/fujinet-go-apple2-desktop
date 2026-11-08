@@ -20,6 +20,7 @@
 #include "SoftDisplayWidget.h"
 #include "debugger/DebuggerWindow.h"
 #include "FujiNetWindows.h"
+#include "help/HelpWindow.h"
 #include "SettingsDialog.h"
 
 #ifndef APPLE2_VERSION_STRING
@@ -30,6 +31,7 @@ MainWindow::MainWindow(apple2session *session, QWidget *parent)
     : QMainWindow(parent), m_session(session)
 {
     setWindowTitle(QStringLiteral("FujiNet Go Apple II"));
+    setProperty("apple2HelpContext", QStringLiteral("main"));
     resize(1120, 900);
 
     auto *gpu = new DisplayWidget(session, this);
@@ -189,6 +191,18 @@ void MainWindow::buildMenus()
     });
 
     QMenu *help = menuBar()->addMenu(QStringLiteral("&Help"));
+    {
+        /* works from every window of the app (the Debugger has the keyboard
+         * too) */
+        QAction *helpAct = help->addAction(QStringLiteral("FujiNet Go Apple II &Help"));
+        helpAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H));
+        helpAct->setShortcutContext(Qt::ApplicationShortcut);
+        addAction(helpAct);
+        connect(helpAct, &QAction::triggered, this, [this] {
+            apple2HelpFor(QApplication::activeWindow() ? QApplication::activeWindow() : this);
+        });
+    }
+    help->addSeparator();
     help->addAction(QStringLiteral("&About"), this, [this] {
         QMessageBox::about(
             this, QStringLiteral("FujiNet Go Apple II"),

@@ -17,6 +17,7 @@
  */
 
 #import "DebuggerWindow.h"
+#import "../help/HelpWindow.h"
 
 #import <QuartzCore/QuartzCore.h>
 
@@ -255,8 +256,14 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
                            action:@selector(stepOut:)
                             frame:NSMakeRect(290, toolbarY, 80, 26)]];
 
+    {
+        NSButton *helpBtn = Apple2HelpButton(nil);
+        [helpBtn setFrame:NSMakeRect(384, toolbarY, 26, 26)];
+        helpBtn.autoresizingMask = NSViewMinYMargin;
+        [root addSubview:helpBtn];
+    }
     _status = [NSTextField labelWithString:@"Running"];
-    _status.frame = NSMakeRect(384, toolbarY + 4, W - 396, 18);
+    _status.frame = NSMakeRect(420, toolbarY + 4, W - 432, 18);
     _status.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     [root addSubview:_status];
 
@@ -370,6 +377,7 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
     if (tab >= 0)
         [_tabs selectTabViewItemAtIndex:tab];
     _tabs.delegate = self;
+    [self updateHelpContext];
     [root addSubview:_tabs];
 
     [_window center];
@@ -699,8 +707,17 @@ static void stop_trampoline(apple2debug_stop_reason reason, uint16_t pc,
 {
     (void)tabView;
     (void)item;
+    [self updateHelpContext];
     if ([self currentTab] == TAB_FUJINET)
         [self refreshFujinet:NO];
+}
+
+/* Help's contexts (apple2help.h): the tab identifiers are the contexts' ends */
+- (void)updateHelpContext
+{
+    NSString *ident = _tabs.selectedTabViewItem.identifier;
+    if (ident)
+        Apple2SetHelpContext(_window, [@"debugger/" stringByAppendingString:ident]);
 }
 
 - (void)refreshAll

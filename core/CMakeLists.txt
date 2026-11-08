@@ -180,6 +180,21 @@ add_subdirectory("${AW}/source/frontends/common2"    applewin-common2)
 add_subdirectory("${AW}/source/frontends/libretro"   applewin-libretro)
 
 # ---- the session library ---------------------------------------------------
+# The Help, embedded: data/help/help.md as topics of styled spans
+# (core/include/apple2help.h), which every frontend lays out with its own
+# toolkit. help_data.h declares the table; the build generates it.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(APPLE2_HELP_C "${CMAKE_BINARY_DIR}/generated/help_content.c")
+add_custom_command(
+  OUTPUT "${APPLE2_HELP_C}"
+  COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/help/make-help.py"
+          --src "${CMAKE_SOURCE_DIR}/data/help/help.md"
+          --out-c "${APPLE2_HELP_C}"
+  DEPENDS "${CMAKE_SOURCE_DIR}/tools/help/make-help.py"
+          "${CMAKE_SOURCE_DIR}/data/help/help.md"
+  COMMENT "Help"
+  VERBATIM)
+
 add_library(apple2session STATIC
   applewin/apple2_host.cpp
   src/session.c
@@ -189,6 +204,8 @@ add_library(apple2session STATIC
   src/audio_sdl.c
   src/gamepad_sdl.c
   src/fujinet_runtime.c
+  src/help.c
+  "${APPLE2_HELP_C}"
   debugger/m6502dasm.c
   debugger/debugger.c
   debugger/sptrace.c
@@ -247,6 +264,10 @@ install(FILES "${AW}/bin/APPLE2E.SYM" "${AW}/bin/A2_BASIC.SYM"
 add_executable(input_test tests/input_test.c)
 target_link_libraries(input_test apple2session)
 
+# The built-in Help covers every setting, key and context.
+add_executable(help_test tests/help_test.c)
+target_link_libraries(help_test PRIVATE apple2session)
+
 add_executable(hostport_test tests/hostport_test.c)
 target_link_libraries(hostport_test apple2session)
 
@@ -276,6 +297,7 @@ target_include_directories(sptrace_test PRIVATE debugger)
 
 add_test(NAME input COMMAND input_test)
 add_test(NAME hostport COMMAND hostport_test)
+add_test(NAME help COMMAND help_test)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME sptrace COMMAND sptrace_test)
 add_test(NAME import COMMAND import_test)

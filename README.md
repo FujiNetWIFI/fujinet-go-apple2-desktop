@@ -22,6 +22,14 @@ follows.
 > installer and the macOS bundle and can cut a release. Still to come: code
 > signing for the macOS bundle. See `TODO`.
 
+## Built-in Help
+
+**Help ▸ FujiNet Go Apple II Help** (Ctrl+Shift+H, ⌘? on a Mac) opens a
+searchable Help, and the Help buttons in Preferences, the debugger and the
+console log open the topic for what they show. The text is
+[data/help/help.md](data/help/help.md), which GitHub shows as it is; the build
+embeds it and every frontend lays it out natively.
+
 ## External FujiNet
 
 A switch in Preferences (Windows Apple II: `FujiNet ▸ Connection`) skips the built-in FujiNet and listens on an address:port you enter, e.g. `0.0.0.0:1985`; point the other FujiNet instance at it.

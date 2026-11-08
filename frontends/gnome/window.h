@@ -23,4 +23,8 @@ void apple2_window_restart_session(Apple2Window *self);
  * one running out of the build tree. */
 const char *apple2_icon_name(void);
 
+/* The Help context the main window shows now: "main", or "prefs/Machine"
+ * while Preferences are open. */
+const char *apple2_window_help_context(Apple2Window *self);
+
 G_END_DECLS
