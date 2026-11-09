@@ -36,7 +36,7 @@
     </screenshot>
     <screenshot>
       <caption>The built-in 6502 debugger</caption>
-      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/v0.9.0/data/screenshots/2_debugger.png</image>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-apple2-desktop/v0.10.0/data/screenshots/2_debugger.png</image>
     </screenshot>
     <screenshot>
       <caption>Preferences: model, slots and display</caption>
@@ -48,10 +48,10 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="0.9.0" date="2026-11-09">
+    <release version="0.10.0" date="2026-11-09">
       <description>
         <p>
-          Debugger rebuilt like the other FujiNet Go desktops: Console, Disassembly, Memory, Breakpoints, Watches, Slots &amp; I/O, Trace, History, Video and FujiNet tabs, a registers strip with editable flags, read/write breakpoints on any address or soft switch with conditions (value, addr, old), Step Over/Out, scanline and frame stepping, memory search, watches, symbols, and Pop Out. The screen and sound no longer freeze while a breakpoint is armed, and memory reads are right on a //e with an empty aux slot.
+          Debugger rebuilt like the other FujiNet Go desktops: Console, Disassembly, Memory, Breakpoints, Watches, Slots &amp; I/O, Trace, History, Video and FujiNet tabs, a registers strip with editable flags, read/write breakpoints on any address or soft switch with conditions, step over/out, scanline and frame stepping, memory search, watches, symbols and Pop Out. The Video tab shows the screen as displayed or the video memory decoded through the soft switches (text 40/80, lo-res, double lo-res, hi-res, double hi-res, mixed, either page), with zoom and overlays; hover a byte to see what it holds, click to pin it, double-click to break on writes to it, and watch the video soft switches change. The Memory tab can show main RAM, aux RAM, the language-card banks and ROM without flipping soft switches (aux:$0400 in Go To and the console). The screen and sound no longer freeze while a breakpoint is armed.
         </p>
       </description>
     </release>

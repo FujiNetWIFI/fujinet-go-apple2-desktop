@@ -133,10 +133,15 @@ cards, the memory map as the CPU sees it now, and the soft switches), Trace,
 History, Video and FujiNet. A registers strip under every tab edits A, X, Y,
 P, SP and PC. Read and write breakpoints see data accesses only: opcode and
 operand fetches, stack pushes and pulls, and indirect-pointer fetches are not
-watched. The Video tab decodes a text, lo-res or hi-res **page** — which is
-not the same as what the machine is displaying, and is the point: it shows
-the buffer a program is drawing into before it flips to it. **Pop Out**
-detaches the current tab into its own window.
+watched. The Video tab shows the **Screen** as displayed, or **Decoded** video
+memory (text 40/80, lo-res, double lo-res, hi-res, double hi-res, mixed, either
+page) either following the soft switches or a mode you choose, which shows the
+buffer a program is drawing into before it flips to it; hover a byte to see
+what it holds, click to pin it, double-click to break on writes to it. Its
+Switches table shows when each video soft switch last changed. The Memory tab's
+**Bank** chooser shows main RAM, aux RAM, the language-card banks and ROM
+without flipping soft switches (`aux:$0400` works in Go To and the console).
+**Pop Out** detaches the current tab into its own window.
 
 The debugger's **FujiNet** tab shows every SmartPort packet between the
 Apple II's card and FujiNet, both ways, with hex: each request, its reply
@@ -152,7 +157,9 @@ count.
 | `APPLE2_PACE_LOG=1` | once-per-second frame pacing: fps, frames behind, frames on vsync |
 | `APPLE2_ROM_DIR` | where a `WITH_APPLE_ROMS=OFF` build reads system ROMs |
 | `APPLE2_OPEN_DEBUGGER=1` | open the debugger window at launch |
-| `APPLE2_DEBUGGER_VIEW=N` | open the debugger on video page N (0 = text page 1, 4 = hi-res page 1) |
+| `APPLE2_DEBUGGER_VIEW=N` | open the Video tab on page N (0 = text page 1, 4 = hi-res page 1) |
+| `APPLE2_DEBUGGER_VIDEO_VIEW`, `_MODE`, `_PAGE`, `_OVERLAYS`, `_ZOOM`, `_SECTION` | Video tab capture hooks (`screen`/`decoded`, mode, page, overlay names, zoom, section) |
+| `APPLE2_VIDEO_PIN=x,y` | pin a point of the Video picture (zoomed picture pixels) on open |
 | `APPLE2_WATCH`, `APPLE2_WATCH_BREAK`, `APPLE2_MEM_GOTO`, `APPLE2_HISTORY`, `APPLE2_POPOUT` | debugger capture hooks: add a watch, break on its change, jump Memory, record history, pop the tab out |
 | `APPLE2_DEBUGGER_TAB` | open the debugger on a tab: a number, or the start of its name (`disassembly`, `memory`, `slots`, `video`, `fujinet`, ...) |
 | `FUJINET_LIB` | explicit path to `libfujinet.so`/`.dylib`/`.dll` |
