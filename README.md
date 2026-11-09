@@ -123,11 +123,20 @@ On macOS the Apple keys are the two **Option** keys, not Command: Command is
 how every menu shortcut on the system is typed, and swallowing it would cost
 you ⌘Q and ⌘W. Full screen is ⌃⌘F.
 
-In the debugger: **F5** pause/continue, **F7** step into, **F8** step over,
-**Shift+F8** step out; click a disassembly line to toggle a breakpoint. The
-video pane decodes a text, lo-res or hi-res **page** — which is not the same
-as what the machine is displaying, and is the point: it shows the buffer a
-program is drawing into before it flips to it.
+In the debugger: **F5** run/stop, **F7** step into, **F8** step over,
+**Shift+F8** step out, **Shift+F7** step a frame, **F9** toggle a breakpoint,
+**F12** show/hide. Its tabs are Console (type `help`), Disassembly (click the
+gutter for a breakpoint), Memory (Go To, search, poke), Breakpoints (execute,
+read and write, address ranges including the `$C0xx` soft switches,
+conditions that can use `value`, `addr` and `old`), Watches, Slots & I/O (the
+cards, the memory map as the CPU sees it now, and the soft switches), Trace,
+History, Video and FujiNet. A registers strip under every tab edits A, X, Y,
+P, SP and PC. Read and write breakpoints see data accesses only: opcode and
+operand fetches, stack pushes and pulls, and indirect-pointer fetches are not
+watched. The Video tab decodes a text, lo-res or hi-res **page** — which is
+not the same as what the machine is displaying, and is the point: it shows
+the buffer a program is drawing into before it flips to it. **Pop Out**
+detaches the current tab into its own window.
 
 The debugger's **FujiNet** tab shows every SmartPort packet between the
 Apple II's card and FujiNet, both ways, with hex: each request, its reply
@@ -144,7 +153,8 @@ count.
 | `APPLE2_ROM_DIR` | where a `WITH_APPLE_ROMS=OFF` build reads system ROMs |
 | `APPLE2_OPEN_DEBUGGER=1` | open the debugger window at launch |
 | `APPLE2_DEBUGGER_VIEW=N` | open the debugger on video page N (0 = text page 1, 4 = hi-res page 1) |
-| `APPLE2_DEBUGGER_TAB` | open the debugger on a tab: a number, or the start of its name (`cpu`, `fujinet`) |
+| `APPLE2_WATCH`, `APPLE2_WATCH_BREAK`, `APPLE2_MEM_GOTO`, `APPLE2_HISTORY`, `APPLE2_POPOUT` | debugger capture hooks: add a watch, break on its change, jump Memory, record history, pop the tab out |
+| `APPLE2_DEBUGGER_TAB` | open the debugger on a tab: a number, or the start of its name (`disassembly`, `memory`, `slots`, `video`, `fujinet`, ...) |
 | `FUJINET_LIB` | explicit path to `libfujinet.so`/`.dylib`/`.dll` |
 | `FUJINET_WEBUI_BIND` | override the web admin bind address (default `127.0.0.1`) |
 
