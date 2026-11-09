@@ -31,6 +31,12 @@
 // it. This is the one translation unit permitted to include them.
 #include "CPU.h"
 #include "Memory.h"
+#include "Core.h"
+#include "CardManager.h"
+#include "Interface.h"
+#include "NTSC.h"
+#include "Speaker.h"
+#include "Video.h"
 
 #include "libretro.h"
 
@@ -51,6 +57,13 @@ extern "C" void (*fngo_sp_trace_hook)(int kind, uint8_t seq,
 extern "C" int fngo_sp_device_count(void);
 extern "C" char fngo_sp_listen_host[64];
 extern "C" int fngo_sp_listen_port;
+
+// The debugger's data-access hook, defined in the staged CPU.cpp (patch 18 in
+// tools/applewin/patch-staged-tree.py), and the two halves of retro_run that
+// the stepped path still needs, defined in the staged libretro.cpp (patch 19).
+extern "C" void (*fngo_dbg_access)(uint16_t addr, uint8_t value, int write);
+extern "C" void fngo_run_begin(void);
+extern "C" void fngo_run_audio(void);
 
 namespace {
 
@@ -435,23 +448,109 @@ unsigned apple2host_step_instruction(void) {
     return static_cast<unsigned>(CpuExecute(0, true));
 }
 
-// `mem` is the CPU's ACTIVE 64K view -- whatever is banked in right now,
-// including ROM and language-card state. MemGetMainPtr() would hand back the
-// main RAM image instead, so $FF00 would read as RAM rather than the ROM the
-// 6502 actually executes. Reading it directly is also what makes the access
-// non-intrusive: it never runs the soft-switch handlers, so peeking at
-// $C000-$CFFF in a debugger cannot toggle hardware.
+// The CPU's active 64K view -- whatever is banked in right now, including ROM
+// and language-card state. AppleWin's own accessors are used because the flat
+// `mem` image is only valid while its cache is (a //e with an empty aux slot
+// runs on the shadow pages instead). Neither runs the soft-switch handlers, so
+// peeking at $C000-$CFFF in a debugger cannot toggle hardware.
 void apple2host_read_mem(uint16_t addr, uint8_t* out, unsigned len) {
     if (!out) return;
-    if (!mem) { std::memset(out, 0, len); return; }
+    if (!mem && !memshadow[0]) { std::memset(out, 0, len); return; }
     for (unsigned i = 0; i < len; ++i)
-        out[i] = mem[static_cast<uint16_t>(addr + i)];
+        out[i] = ReadByteFromMemory(static_cast<uint16_t>(addr + i));
 }
 
 void apple2host_write_mem(uint16_t addr, const uint8_t* in, unsigned len) {
-    if (!in || !mem) return;
-    for (unsigned i = 0; i < len; ++i)
-        mem[static_cast<uint16_t>(addr + i)] = in[i];
+    if (!in || (!mem && !memshadow[0])) return;
+    for (unsigned i = 0; i < len; ++i) {
+        const uint16_t a = static_cast<uint16_t>(addr + i);
+        // Exactly what the CPU's own store does (_WRITE in cpu_general.inl):
+        // through the write map, which is NULL for ROM and the soft-switch
+        // page (so the edit is ignored there) and is not the read map when the
+        // language card reads ROM but writes RAM. WriteByteToMemory would
+        // scribble on the flat read image.
+        if (!memwrite[a >> 8]) continue;
+        memdirty[a >> 8] = 0xFF;
+        *(memwrite[a >> 8] + (a & 0xFF)) = in[i];
+    }
+}
+
+// --- the stepped path -------------------------------------------------------
+
+void apple2host_step_begin(void) { fngo_run_begin(); }
+
+// What CommonFrame::Execute() does after each batch of CPU cycles.
+void apple2host_step_work(unsigned cycles) {
+    if (!cycles) return;
+    GetCardMgr().Update(cycles);
+    SpkrUpdate(cycles);
+    g_dwCyclesThisFrame = (g_dwCyclesThisFrame + cycles) % NTSC_GetCyclesPerFrame();
+}
+
+void apple2host_present_screen(void) { GetFrame().VideoPresentScreen(); }
+
+void apple2host_step_end(void) {
+    GetFrame().VideoPresentScreen();
+    fngo_run_audio();
+    g_sp_devices = fngo_sp_device_count();
+}
+
+void apple2host_set_access_hook(Apple2AccessHook hook) { fngo_dbg_access = hook; }
+
+// --- debugger: machine state ------------------------------------------------
+
+int apple2host_is_65c02(void) { return GetMainCpu() == CPU_65C02; }
+uint64_t apple2host_cycles(void) { return static_cast<uint64_t>(g_nCumulativeCycles); }
+unsigned apple2host_cycles_per_frame(void) { return NTSC_GetCyclesPerFrame(); }
+unsigned apple2host_lines_per_frame(void) { return NTSC_GetCyclesPerFrame() / 65; }
+
+void apple2host_get_beam(unsigned* line, unsigned* horz) {
+    uint16_t v = 0, h = 0;
+    NTSC_GetVideoVertHorzForDebugger(v, h);
+    if (line) *line = v;
+    if (horz) *horz = h;
+}
+
+const char* apple2host_model_name(void) {
+    switch (GetApple2Type()) {
+        case A2TYPE_APPLE2:         return "Apple ][";
+        case A2TYPE_APPLE2PLUS:     return "Apple ][+";
+        case A2TYPE_APPLE2JPLUS:    return "Apple ][ J-Plus";
+        case A2TYPE_APPLE2E:        return "Apple //e";
+        case A2TYPE_APPLE2EENHANCED:return "Enhanced Apple //e";
+        case A2TYPE_APPLE2C:        return "Apple //c";
+        case A2TYPE_PRAVETS8M:      return "Pravetz 8M";
+        case A2TYPE_PRAVETS82:      return "Pravetz 82";
+        case A2TYPE_BASE64A:        return "Base64A";
+        case A2TYPE_PRAVETS8A:      return "Pravetz 8A";
+        case A2TYPE_TK30002E:       return "TK3000 //e";
+        default:                    return "Apple II";
+    }
+}
+
+uint32_t apple2host_mem_mode(void) { return GetMemMode(); }
+uint32_t apple2host_video_mode(void) { return GetVideo().GetVideoMode(); }
+int apple2host_altcharset(void) { return GetVideo().VideoGetSWAltCharSet() ? 1 : 0; }
+
+int apple2host_has_aux(void) { return IsAppleIIeOrAbove(GetApple2Type()) ? 1 : 0; }
+
+int apple2host_slot_card(int slot, char* name, int namesz) {
+    SS_CARDTYPE type = CT_Empty;
+    if (name && namesz > 0) name[0] = '\0';
+    if (slot < 0 || slot > 8) return 0;
+    if (slot == 8) {
+        if (!apple2host_has_aux()) return 0;
+        type = GetCardMgr().QueryAux();
+    } else {
+        type = GetCardMgr().QuerySlot(static_cast<UINT>(slot));
+    }
+    if (type == CT_Empty) return 0;
+    if (name && namesz > 0) {
+        const std::string n = type == CT_SmartPortOverSlip
+            ? std::string("FujiNet SmartPort") : Card::GetCardName(type);
+        std::snprintf(name, static_cast<size_t>(namesz), "%s", n.c_str());
+    }
+    return type == CT_SmartPortOverSlip ? 1 : 0;
 }
 
 void apple2host_get_geometry(int* width, int* height) {

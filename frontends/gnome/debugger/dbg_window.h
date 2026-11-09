@@ -11,8 +11,13 @@
 
 G_BEGIN_DECLS
 
-/* Presents the debugger window, creating it on first call. Safe to call
- * repeatedly; the window is a singleton per process. */
+/* Presents the debugger window, creating it on first call; showing it
+ * attaches the engine, which stops the machine. Safe to call repeatedly; the
+ * window is a singleton per process. */
 void apple2_debugger_show(GtkWindow *parent, apple2session *session);
+
+/* Shows it if hidden or absent, hides it (detaching, so the machine runs)
+ * if showing. */
+void apple2_debugger_toggle(GtkWindow *parent, apple2session *session);
 
 G_END_DECLS

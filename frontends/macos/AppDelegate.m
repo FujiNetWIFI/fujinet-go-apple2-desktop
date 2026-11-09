@@ -322,7 +322,7 @@ static const option_row kOptionRows[] = {
 - (void)showDebugger:(id)sender
 {
     (void)sender;
-    [DebuggerWindow showForSession:_session];
+    [DebuggerWindow toggleForSession:_session];
 }
 
 /* ---- settings ------------------------------------------------------------

@@ -156,11 +156,19 @@ void gamepad_stop(apple2session *s);
 /* debugger.c -- all emulator-thread side except create/destroy. */
 apple2debug *apple2debug_create(apple2session *s);
 void apple2debug_destroy(apple2debug *d);
-/* One debugger-controlled frame slice; returns 1 when a frame's worth of
- * cycles ran. May block while paused. */
+/* One debugger-controlled frame slice (steps the CPU itself and does retro_run's
+ * per-frame work); returns 1 when a frame's worth of cycles ran, 0 if the
+ * session is stopping. May block while stopped. */
 int  apple2debug_session_frame(apple2session *s);
-/* Unpark a paused debugger so a stopping emulator thread can exit. */
+/* The machine came up (emulator thread, before its first frame): an attached
+ * engine stops it at its first instruction. */
+void apple2debug_core_started(apple2debug *d);
+/* The session is stopping: unpark a stopped emulator thread so it can exit
+ * (called before the thread is joined). */
 void apple2debug_resume_for_stop(apple2debug *d);
+/* The emulator thread is about to tear the core down: the engine stops
+ * touching it. */
+void apple2debug_core_gone(apple2debug *d);
 
 /* fujinet_runtime.c */
 int  fujinet_start(apple2session *s);

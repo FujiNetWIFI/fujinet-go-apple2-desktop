@@ -26,7 +26,9 @@ static const char *const platform_names[] = { "GNOME", "KDE", "Windows", "macOS"
 /* What the frontends' Help buttons and menus open. */
 static const char *const contexts[] = {
     "main", "fujilog", "prefs/Machine", "prefs/FujiNet", "prefs/Connection",
-    "debugger/cpu", "debugger/fujinet",
+    "debugger/console", "debugger/disassembly", "debugger/memory",
+    "debugger/breakpoints", "debugger/watches", "debugger/slots", "debugger/trace",
+    "debugger/history", "debugger/video", "debugger/fujinet",
 };
 
 /* The Preferences labels, as the frontends show them. */
@@ -176,16 +178,53 @@ check_ports(int p)
     require(p, "an-external-fujinet", "default address", "127.0.0.1:1985");
 }
 
-/* The debugger's buttons and its tabs. */
-/* The debugger's buttons, and each prompt command in a `code` span. */
-/* The debugger's buttons and views. */
+/* The debugger's buttons, its views and each prompt command in a `code` span. */
 static void
 check_debugger(int p)
 {
-    static const char *const words[] = { "Pause or Continue", "Into", "Over", "Out", "two tabs", "Text 1", "Text 2",
-                                         "Lo-res 1", "Lo-res 2", "Hi-res 1", "Hi-res 2" };
+    static const char *const words[] = { "Run or Stop", "Step Over", "Step Out", "Frame", "Run to Cursor",
+                                         "Load Symbols", "Pop Out", "ten tabs" };
+    static const char *const commands[] = { "step", "over", "out", "run", "stop", "runto", "scanline", "frame",
+                                            "break", "bpr", "bpw", "delete", "enable", "clear", "print", "regs",
+                                            "set", "mem", "poke", "video", "io", "map", "fujinet", "label",
+                                            "labels", "disasm", "trace", "watch", "unwatch", "find", "save" };
+    int t, b;
+
     for (size_t k = 0; k < sizeof words / sizeof *words; k++)
         require(p, "debugger", "button", words[k]);
+    {
+        static const char *const vwords[] = { "Text 1", "Text 2", "Lo-res 1", "Lo-res 2", "Hi-res 1", "Hi-res 2" };
+        for (size_t k = 0; k < sizeof vwords / sizeof *vwords; k++)
+            require(p, "debugger/video", "view", vwords[k]);
+    }
+    require(p, "debugger/breakpoints", "limits", "stack");
+    require(p, "debugger/breakpoints", "soft switch", "$C030");
+    require(p, "debugger/slots", "slots", "FujiNet");
+    CHECK(apple2help_find("debugger/console", &t, &b) == 0, "no debugger/console");
+    {
+        const apple2help_topic *tp = apple2help_topic_at(t);
+        int end = apple2help_section_end(t, b);
+        for (size_t k = 0; k < sizeof commands / sizeof *commands; k++) {
+            const char *cmd = commands[k];
+            size_t n = strlen(cmd);
+            int found = 0;
+            for (int bl = b; bl < end && !found; bl++) {
+                const apple2help_block *blk = &tp->blocks[bl];
+                if (!(blk->platforms & platforms[p]))
+                    continue;
+                for (int i = 0; i < blk->nspans && !found; i++) {
+                    const char *c = blk->spans[i].text;
+                    if (blk->spans[i].kind != APPLE2HELP_CODE)
+                        continue;
+                    found = !strncmp(c, cmd, n) && (c[n] == 0 || c[n] == ' ' || c[n] == '/');
+                }
+            }
+            if (!found) {
+                fprintf(stderr, "MISSING (%s) debugger/console: command `%s`\n", platform_names[p], cmd);
+                misses++;
+            }
+        }
+    }
 }
 
 int
@@ -214,7 +253,7 @@ main(void)
     CHECK(apple2help_search(APPLE2HELP_GNOME, "disk", hits, 16) > 0, "search disk");
     CHECK(apple2help_search(APPLE2HELP_GNOME, "zzqxj", hits, 16) == 0, "search nonsense");
     int n = apple2help_search(APPLE2HELP_KDE, "inspector", hits, 16);
-    CHECK(n > 0 && apple2help_find("debugger/cpu", &t, &b) == 0
+    CHECK(n > 0 && apple2help_find("debugger/video", &t, &b) == 0
           && hits[0].topic == t && hits[0].block == b, "inspector is the first hit");
     for (int i = 1; i < n; i++)
         CHECK(hits[i - 1].score >= hits[i].score, "hits best first");

@@ -19,6 +19,19 @@
 
 #include "apple2debug.h"
 
+/* One decoded instruction (engine-internal; the public shape is
+ * apple2debug_line in apple2debug.h, built from this). */
+typedef struct {
+    uint16_t addr;
+    uint8_t  len;         /* 1..3 */
+    uint8_t  bytes[3];
+    char     text[32];    /* "LDA $C0F0,X" */
+    uint16_t target;      /* branch/jump/call destination, else 0 */
+    uint8_t  flags;       /* APPLE2DASM_* */
+    uint8_t  imm;         /* immediate operand: its fetch is not a data read */
+    const char *symbol;   /* unused by the engine; kept for the tests */
+} apple2dasm_line;
+
 /* Decode one instruction from `bytes` (at least 3 readable bytes; short reads
  * are safe because the length is determined by the opcode alone) placed at
  * `addr`. Fills every field of `out` except `symbol`, which the engine

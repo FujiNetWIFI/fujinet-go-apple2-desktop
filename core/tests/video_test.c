@@ -47,7 +47,7 @@ static uint32_t px(const uint32_t *fb, int x, int y)
 static int wait_paused(apple2debug *d, int ms)
 {
     while (ms > 0) {
-        if (apple2debug_is_paused(d)) return 1;
+        if (apple2debug_is_stopped(d)) return 1;
         usleep(5000);
         ms -= 5;
     }
@@ -59,7 +59,8 @@ static void fill(apple2debug *d, uint16_t base, int len, uint8_t value)
     uint8_t *buf = malloc((size_t)len);
     if (!buf) return;
     memset(buf, value, (size_t)len);
-    apple2debug_write_mem(d, base, buf, len);
+    for (int i = 0; i < len; i++)
+        apple2debug_write(d, (uint16_t)(base + i), buf[i]);
     free(buf);
 }
 
@@ -110,7 +111,7 @@ int main(void)
     usleep(300000);
 
     /* Paused, so the machine cannot scribble over the bytes under test. */
-    apple2debug_pause(d);
+    apple2debug_attach(d);
     CHECK(wait_paused(d, 2000), "did not pause within 2s");
 
     /* ---- text: the three interleaved bands ------------------------------ */
@@ -122,10 +123,10 @@ int main(void)
         /* Row 0 is at the base, row 1 a whole 0x80 further on, and row 8 is
          * only 0x28 in -- the band boundary. Getting any of these wrong is
          * the classic Apple II screen bug. */
-        apple2debug_write_mem(d, 0x0400, &inv_space, 1); /* row 0,  col 0 */
-        apple2debug_write_mem(d, 0x0480, &inv_space, 1); /* row 1,  col 0 */
-        apple2debug_write_mem(d, 0x0428, &inv_space, 1); /* row 8,  col 0 */
-        apple2debug_write_mem(d, 0x0450, &inv_space, 1); /* row 16, col 0 */
+        apple2debug_write(d, 0x0400, inv_space); /* row 0,  col 0 */
+        apple2debug_write(d, 0x0480, inv_space); /* row 1,  col 0 */
+        apple2debug_write(d, 0x0428, inv_space); /* row 8,  col 0 */
+        apple2debug_write(d, 0x0450, inv_space); /* row 16, col 0 */
 
         CHECK(apple2debug_render_view(d, APPLE2VIEW_TEXT_1, fb) == 0,
               "render text 1 failed");
@@ -146,7 +147,7 @@ int main(void)
     {
         const uint8_t both = 0x0F; /* low = 15 (white), high = 0 (black) */
         fill(d, 0x0400, 0x400, 0x00);
-        apple2debug_write_mem(d, 0x0400, &both, 1);
+        apple2debug_write(d, 0x0400, both);
 
         CHECK(apple2debug_render_view(d, APPLE2VIEW_LORES_1, fb) == 0,
               "render lores 1 failed");
@@ -162,9 +163,9 @@ int main(void)
         const uint8_t pair = 0x03;    /* bits 0 and 1 -> white      */
 
         fill(d, 0x2000, 0x2000, 0x00);
-        apple2debug_write_mem(d, 0x2000, &lone_lo, 1); /* y = 0  */
-        apple2debug_write_mem(d, 0x2400, &lone_hi, 1); /* y = 1  */
-        apple2debug_write_mem(d, 0x2080, &pair, 1);    /* y = 8  */
+        apple2debug_write(d, 0x2000, lone_lo); /* y = 0  */
+        apple2debug_write(d, 0x2400, lone_hi); /* y = 1  */
+        apple2debug_write(d, 0x2080, pair);    /* y = 8  */
 
         CHECK(apple2debug_render_view(d, APPLE2VIEW_HIRES_1, fb) == 0,
               "render hires 1 failed");

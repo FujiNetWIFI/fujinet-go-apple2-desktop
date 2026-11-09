@@ -51,6 +51,7 @@ KBD_MAC_FIXED = {
     "Ctrl+,": "⌘,",
     "Ctrl+Shift+H": "⌘?",
     "Shift+F8": "⇧F8",
+    "Shift+F7": "⇧F7",
 }
 
 # A non-last table column wider than this squeezes the last one.

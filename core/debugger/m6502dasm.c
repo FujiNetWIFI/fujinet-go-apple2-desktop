@@ -139,6 +139,7 @@ int apple2dasm_decode(uint16_t addr, const uint8_t *bytes,
     for (i = 0; i < len; i++)
         out->bytes[i] = bytes[i];
     out->flags = flags_for(opcode, op);
+    out->imm = op->mode == IMM;
 
     switch (op->mode) {
     case ILL:

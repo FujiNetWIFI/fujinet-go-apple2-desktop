@@ -271,32 +271,151 @@ blending, which follows Scanlines).
 
 # Debugger
 
-The Debugger (<kbd>F12</kbd>) stops the machine and shows what it is doing. It has
-two tabs, and closing it lets the machine go on as it was.
+The Debugger (<kbd>F12</kbd>) stops the machine and shows what it is doing.
+It has ten tabs, and the registers show under all of them; closing it lets the
+machine go on as it was. Opening it stops the machine. **Pop Out** moves any
+tab into a window of its own, and **Dock** (or closing that window) puts it
+back.
 
 | Button | Does |
 |---|---|
-| Pause or Continue (<kbd>F5</kbd>) | Stops before the next instruction, or runs on |
-| Into (<kbd>F7</kbd>) | One instruction |
-| Over (<kbd>F8</kbd>) | Over a subroutine call |
-| Out (<kbd>Shift+F8</kbd>) | On until the routine returns |
+| Run or Stop (<kbd>F5</kbd>) | Stops before the next instruction, or runs on |
+| Step (<kbd>F7</kbd>) | One instruction |
+| Step Over (<kbd>F8</kbd>) | Over a `JSR` or `BRK` |
+| Step Out (<kbd>Shift+F8</kbd>) | On until the routine returns (`RTS` or `RTI`) |
+| Frame (<kbd>Shift+F7</kbd>) | On to the next frame |
+| Run to Cursor | On to the selected line |
+| Load Symbols | Reads `.SYM`, `.lbl`, `.sym` and `.map` files |
+| Save | Saves the disassembly, memory or registers to a file |
 | Help | Opens the topic of the tab that shows |
+| Pop Out | Moves the tab that shows into its own window |
 
-<!-- context: debugger/cpu -->
-## CPU
+The screen and the sound go on while the Debugger is open and the machine
+runs; only a stop freezes them. The soft switches are memory on the Apple II
+(`$C000` to `$C0FF`), so a breakpoint on one of them is an ordinary read or
+write breakpoint.
 
-The 6502's registers, the disassembly with symbols, and a memory view; click a
-line of the disassembly to toggle its breakpoint. A video page decodes a page of
-memory as the CPU sees it right now: *Text 1*, *Text 2*, *Lo-res 1*, *Lo-res 2*,
-*Hi-res 1* or *Hi-res 2*. It is a memory inspector, not what the video hardware
-is scanning out, which is what makes it useful for finding the page a program is
-drawing into.
+<!-- context: debugger/console -->
+## Console
+
+The Console takes commands, with completion on <kbd>Tab</kbd> and recall on
+<kbd>Up</kbd> and <kbd>Down</kbd>. Numbers are `$C000`, `0xC000`, `C000h`,
+`49152` or `%1010`; expressions can use the registers `a`, `x`, `y`, `p`, `sp`
+and `pc`, the flags `cf`, `zf`, `if`, `df`, `bf`, `vf` and `nf`, `[addr]` and
+`{addr}` for memory, labels, and C's operators. `help` lists the commands.
+
+| Command | Does |
+|---|---|
+| `step`, `over`, `out` | One instruction; over a call; to the return |
+| `run`, `go`, `stop` | Go on or break |
+| `runto` | Runs to an address |
+| `scanline`, `frame` | Runs some beam lines or frames |
+| `break`, `bp` | An execute breakpoint |
+| `bpr`, `bpw` | Memory reads or writes, soft switches included |
+| `delete`, `enable`, `clear` | Manage breakpoints (also `disable`, `breaks`) |
+| `print` | Evaluates an expression |
+| `regs`, `set` | Shows or sets the registers |
+| `mem`, `dump`, `poke` | Dumps memory; writes bytes |
+| `video` | The video soft switches |
+| `io`, `map` | The soft switches, the slots and the memory map |
+| `fujinet` | The FujiNet link |
+| `label`, `labels`, `symbols` | Name an address; load labels |
+| `disasm`, `dis` | Disassembles |
+| `trace` | The instruction trace |
+| `watch`, `unwatch` | The watch list: `watch count`, `unwatch 0` |
+| `find` | Searches memory for bytes (`find A9 00`) or text (`find text HELLO`) |
+| `save` | Saves state to a file |
+
+<!-- context: debugger/disassembly -->
+## Disassembly
+
+The 6502 (the 65C02 on an Enhanced Apple //e) disassembled at the PC, with the
+labels from AppleWin's symbol files and the soft switch names. The current
+instruction is in the app's accent colour and breakpoints are red dots (grey
+when disabled). Click a line to select it; double-click, <kbd>F9</kbd> or the
+gutter toggles its breakpoint. **Follow PC** keeps the current line in view,
+and every stop brings the view back to it, even if you had scrolled away.
+
+The registers and flags sit in a strip under the tabs. Edit a value while
+stopped and press <kbd>Enter</kbd>; the stack pointer takes `$F0` or `$01F0`.
+
+<!-- context: debugger/memory -->
+## Memory
+
+The 64K the CPU sees right now (bank switching, the language card, auxiliary
+memory and the ROMs included), 16 bytes to a row; looking never touches a soft
+switch. **Go To** takes an address, a label, an expression or a range
+(`$0400-$07FF`, `count..count+3`) and highlights what it found. **Poke**
+writes bytes; ROM ignores them. The search bar finds hex bytes (`A9 00`) or
+text (not case-sensitive) with **Find Next** and **Find Previous**, wrapping
+once; the machine has to be stopped.
+
+<!-- context: debugger/breakpoints -->
+## Breakpoints
+
+Execute breakpoints with conditions, address ranges and hit counts, and memory
+read and write watchpoints, each of which can be disabled. Watch a soft switch
+the same way: a read breakpoint on `$C030` stops at every click of the speaker.
+A condition can use `value` and `addr`, and on a write `old`, the byte that was
+there before: `value != old` stops only when a write changes something. Read
+and write breakpoints stop after the instruction that touched the address.
+
+They see an instruction's data accesses only. Opcode and operand fetches, stack
+pushes and pulls (`PHA`, `JSR`, `RTS`) and the pointer fetches of indirect
+addressing are not watched, and neither is the operand of an immediate
+instruction (`LDA #$00`). The line at the top says why the machine last
+stopped. **Add** makes a breakpoint, **Clear Hits** zeroes the counts and
+**Clear All** removes them.
+
+<!-- context: debugger/watches -->
+## Watches
+
+Things to keep an eye on: type an address, a label, an expression or a range
+and press **Add**. Each shows its value while the machine is stopped (`-` while
+it runs, `?` if it means nothing yet, which a later **Load Symbols** may fix).
+**Memory** shows it in the Memory tab, **Break on Change** stops the machine
+when something writes a different value there, and **Remove** drops it.
+
+<!-- context: debugger/slots -->
+## Slots and I/O
+
+The machine and its CPU, the soft switches (text, mixed, page 2, hi-res,
+80 columns, 80STORE, the alternate character set, RAMRD, RAMWRT, ALTZP, the
+language card's bank and whether it reads and writes RAM, INTCXROM and
+SLOTC3ROM), the card in every slot (the FujiNet SmartPort card is marked) and
+the memory map as the CPU sees it now: main or auxiliary RAM, the language
+card or the ROM at `$D000`, the slot ROMs or the internal ROM at `$C100`.
+
+<!-- context: debugger/trace -->
+## Trace
+
+Every instruction the CPU runs while the Debugger is open, live. **Record**
+turns it on (it slows the machine a little, so it starts off), **Clear**
+empties it, and the filter shows everything, only the jumps, branches, calls
+and returns, or only a range of addresses. Trace and History share one
+recording.
+
+<!-- context: debugger/history -->
+## History
+
+The same recording, read at a stop: the lead-up to a breakpoint or a pause,
+oldest first, with the registers at each instruction. Turn **Record** on
+before you run to the place you want to look at.
+
+<!-- context: debugger/video -->
+## Video
+
+A page inspector: it decodes a page of memory as the CPU sees it right now,
+*Text 1*, *Text 2*, *Lo-res 1*, *Lo-res 2*, *Hi-res 1* or *Hi-res 2*. It is a
+memory inspector, not what the video hardware is scanning out (the soft
+switches on the Slots and I/O tab say that), which is what makes it useful for
+finding the page a program is drawing into before it flips to it.
 
 <!-- context: debugger/fujinet -->
 ## FujiNet packets
 
 Every SmartPort packet the card and FujiNet exchange, both ways, and the card's
-state. **Clear** empties the list.
+state, recorded from the moment the machine starts. **Clear** empties the list.
 
 # Files and folders
 

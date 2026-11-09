@@ -208,6 +208,11 @@ add_library(apple2session STATIC
   "${APPLE2_HELP_C}"
   debugger/m6502dasm.c
   debugger/debugger.c
+  debugger/expr.c
+  debugger/prompt.c
+  debugger/symbols.c
+  debugger/symbols_builtin.c
+  debugger/memtools.c
   debugger/sptrace.c
   debugger/a2video.c
 )
@@ -284,6 +289,10 @@ target_link_libraries(debug_seam_test apple2session)
 add_executable(debug_engine_test tests/debug_engine_test.c)
 target_link_libraries(debug_engine_test apple2session)
 
+add_executable(memtools_test tests/memtools_test.c)
+target_link_libraries(memtools_test apple2session)
+target_include_directories(memtools_test PRIVATE debugger)
+
 add_executable(video_test tests/video_test.c)
 target_link_libraries(video_test apple2session)
 
@@ -303,9 +312,14 @@ add_test(NAME sptrace COMMAND sptrace_test)
 add_test(NAME import COMMAND import_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME debug_seam COMMAND debug_seam_test)
+# The same seam on the machines that run AppleWin's other CPU loops (NMOS 6502,
+# and the //e whose flat memory image is not valid).
+add_test(NAME debug_seam_e COMMAND debug_seam_test "Apple //e")
+add_test(NAME debug_seam_plus COMMAND debug_seam_test "Apple ][+")
 add_test(NAME debug_engine COMMAND debug_engine_test)
 add_test(NAME video COMMAND video_test)
-set_tests_properties(boot_smoke debug_seam debug_engine video
+add_test(NAME memtools COMMAND memtools_test)
+set_tests_properties(boot_smoke debug_seam debug_seam_e debug_seam_plus debug_engine video
                      PROPERTIES SKIP_RETURN_CODE 77)
 
 # Makes the COMPLIANCE.md claim checkable: a ROM-less build must not have any

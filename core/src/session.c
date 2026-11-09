@@ -343,6 +343,11 @@ static void *emu_thread_main(void *arg)
          * core_start returns, AppleWin has inserted the slot cards -- so the
          * SmartPort listener is bound and FujiNet can be started. */
         pthread_mutex_lock(&s->start_mtx);
+        /* An engine that exists is told before core_started is published; one
+         * created later sees core_started (apple2session_debugger takes the
+         * same lock), so none misses the machine. */
+        if (ok && s->debugger)
+            apple2debug_core_started(s->debugger);
         s->core_started = ok ? 1 : -1;
         pthread_cond_broadcast(&s->start_cv);
         pthread_mutex_unlock(&s->start_mtx);
@@ -433,6 +438,9 @@ static void *emu_thread_main(void *arg)
         }
     }
 
+    /* The engine lets go of the core before it is torn down. */
+    if (s->debugger)
+        apple2debug_core_gone(s->debugger);
     apple2host_core_stop();
     /* Drop the sink before the session's frame buffer can go away. */
     apple2host_set_frame_sink(NULL, NULL);
@@ -908,7 +916,11 @@ apple2debug *apple2session_debugger(apple2session *s)
      * per frame. */
     pthread_mutex_lock(&s->lifecycle_mtx);
     if (!s->debugger) {
-        s->debugger = apple2debug_create(s);
+        apple2debug *d;
+        pthread_mutex_lock(&s->start_mtx);  /* vs emu_thread_main's core_started */
+        d = apple2debug_create(s);
+        s->debugger = d;
+        pthread_mutex_unlock(&s->start_mtx);
         if (s->debugger) {
             /* AppleWin ships these and the staging step copies them in, so
              * unlike the ADAM target there is no extraction script to run.
@@ -916,12 +928,15 @@ apple2debug *apple2session_debugger(apple2session *s)
             static const char *const k_syms[] = {
                 "APPLE2E.SYM", "A2_BASIC.SYM", "A2_DOS33.SYM2", NULL
             };
+            static const char *const k_tables[] = {
+                "applewin", "basic", "dos33"
+            };
             char path[APPLE2_PATH_MAX];
             int i;
             for (i = 0; k_syms[i]; i++) {
                 snprintf(path, sizeof(path), "%s/%s", s->symbols_dir,
                          k_syms[i]);
-                apple2debug_symbols_load(s->debugger, path);
+                apple2debug_symbols_load(s->debugger, path, k_tables[i]);
             }
         }
     }

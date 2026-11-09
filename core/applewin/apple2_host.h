@@ -96,11 +96,78 @@ void apple2host_set_regs(const apple2host_regs *in);
 unsigned apple2host_step_instruction(void);
 
 /* Read/write the CPU's current memory view (what the 6502 would see at that
- * address right now, respecting bank switching). Reads are non-intrusive:
- * they go through the memory image, not through the soft-switch handlers, so
- * inspecting $C000-$CFFF in a debugger cannot toggle hardware. */
+ * address right now, respecting bank switching: AppleWin's
+ * ReadByteFromMemory / WriteByteToMemory, which also cover the //e with an
+ * empty aux slot, where the flat image is not valid). Reads are non-intrusive:
+ * they never run the soft-switch handlers, so inspecting $C000-$CFFF in a
+ * debugger cannot toggle hardware. ROM ignores writes. */
 void apple2host_read_mem(uint16_t addr, uint8_t *out, unsigned len);
 void apple2host_write_mem(uint16_t addr, const uint8_t *in, unsigned len);
+
+/* ---- the stepped path ----------------------------------------------------
+ * While the debugger engine is engaged the session steps the CPU itself
+ * (apple2host_step_instruction) instead of calling apple2host_core_run_frame().
+ * retro_run() does more than run the CPU, and the stepped path must do all of
+ * it or the screen, the sound and the keyboard stop:
+ *   step_begin()       variable / input polling         (start of a frame)
+ *   step_work(cycles)  the cards and the speaker catch up with the CPU,
+ *                      and the frame's cycle counter advances; call it with
+ *                      the cycles the stepped instructions took, in batches
+ *   step_end()         present the screen, hand the audio on, refresh the
+ *                      cached FujiNet device count      (end of a frame)
+ * present_screen() alone re-presents the picture (a stop). */
+void apple2host_step_begin(void);
+void apple2host_step_work(unsigned cycles);
+void apple2host_step_end(void);
+void apple2host_present_screen(void);
+
+/* ---- debugger: data accesses ---------------------------------------------
+ * A hook run from inside the running CPU loop for every data read (after the
+ * value is fetched) and write (BEFORE the store, so the old byte can still be
+ * read) an instruction makes. Opcode and operand fetches, stack pushes/pulls
+ * and indirect-pointer fetches do not go through it. NULL (the default) costs
+ * one null-pointer test per data access. Called on the emulator thread. */
+typedef void (*Apple2AccessHook)(uint16_t addr, uint8_t value, int write);
+void apple2host_set_access_hook(Apple2AccessHook hook);
+
+/* ---- debugger: machine state --------------------------------------------- */
+int      apple2host_is_65c02(void);          /* Enhanced //e (65C02) */
+uint64_t apple2host_cycles(void);            /* cycles since power-on */
+unsigned apple2host_cycles_per_frame(void);  /* 17030 NTSC, 19656 PAL */
+unsigned apple2host_lines_per_frame(void);   /* 262 NTSC, 312 PAL */
+/* The beam: scanline of the frame in progress (0-based), and the video clock
+ * within the line. */
+void     apple2host_get_beam(unsigned *line, unsigned *horz);
+/* "Apple //e", "Enhanced Apple //e", "Apple ][+" ... */
+const char *apple2host_model_name(void);
+/* AppleWin's MF_* memory-mode flags (Memory.h), re-exposed so the engine does
+ * not need AppleWin's headers. */
+#define APPLE2HOST_MF_80STORE   0x00000001u
+#define APPLE2HOST_MF_ALTZP     0x00000002u
+#define APPLE2HOST_MF_RAMRD     0x00000004u
+#define APPLE2HOST_MF_RAMWRT    0x00000008u
+#define APPLE2HOST_MF_BANK2     0x00000010u  /* language card bank 2 at $D000 */
+#define APPLE2HOST_MF_HIGHRAM   0x00000020u  /* language card RAM read */
+#define APPLE2HOST_MF_HIRES     0x00000040u
+#define APPLE2HOST_MF_PAGE2     0x00000080u
+#define APPLE2HOST_MF_SLOTC3ROM 0x00000100u
+#define APPLE2HOST_MF_INTCXROM  0x00000200u
+#define APPLE2HOST_MF_WRITERAM  0x00000400u  /* language card RAM write */
+uint32_t apple2host_mem_mode(void);
+/* AppleWin's VF_* video flags. */
+#define APPLE2HOST_VF_80COL     0x00000001u
+#define APPLE2HOST_VF_DHIRES    0x00000002u
+#define APPLE2HOST_VF_HIRES     0x00000004u
+#define APPLE2HOST_VF_80STORE   0x00000008u
+#define APPLE2HOST_VF_MIXED     0x00000010u
+#define APPLE2HOST_VF_PAGE2     0x00000020u
+#define APPLE2HOST_VF_TEXT      0x00000040u
+uint32_t apple2host_video_mode(void);
+int      apple2host_altcharset(void);
+/* Slots 0-7 and 8 (the //e's auxiliary slot): the card's name ("" if empty)
+ * into name; returns 1 for the FujiNet SmartPort card, else 0. */
+int      apple2host_slot_card(int slot, char *name, int namesz);
+int      apple2host_has_aux(void);           /* slot 8 exists (a //e) */
 
 /* ---- FujiNet trace seam --------------------------------------------------
  * Every SmartPort request the card sends FujiNet over SLIP, and the reply:

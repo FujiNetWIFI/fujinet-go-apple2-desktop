@@ -404,6 +404,115 @@ def apply_all(root):
         ),
     ])
 
+    # -- 18: the debugger's data-access hook ----------------------------------
+    # AppleWin's running CPU loops (Cpu6502, Cpu6502_altRW, Cpu65C02,
+    # Cpu65C02_altRW) have no way to see a data read or write, which the
+    # debugger's READ/WRITE breakpoints need. READ(addr)/WRITE(value) are the
+    # macros every instruction's data access goes through (opcode and operand
+    # fetches, stack pushes/pulls and indirect-pointer fetches use other
+    # macros, so they are not seen), so wrap them:
+    #   fngo_dbg_access(addr, value, write)
+    # runs after a read has fetched its value and BEFORE a write stores its,
+    # so the engine can still read the byte a write replaces. The cost with no
+    # read/write breakpoint is one null-pointer test per data access. The
+    # stepping/heatmap variants (MODE_STEPPING) are left alone: the session
+    # never leaves MODE_RUNNING.
+    patch(root, "source/CPU.cpp", [
+        (
+            "// 6502 & no debugger\n"
+            "#define READ(addr) _READ_WITH_IO_F8xx(addr)\n"
+            "#define WRITE(value) _WRITE_WITH_IO_F8xx(value)\n",
+            "// [fujinet-go-apple2-desktop] The debugger's data-access hook (see\n"
+            "// tools/applewin/patch-staged-tree.py, patch 18). Null unless a READ or\n"
+            "// WRITE breakpoint exists.\n"
+            "extern \"C\" { void (*fngo_dbg_access)(uint16_t addr, uint8_t value, int write) = nullptr; }\n"
+            "static __forceinline BYTE FngoRd(WORD a, BYTE v)\n"
+            "{\n"
+            "\tif (fngo_dbg_access) fngo_dbg_access(a, v, 0);\n"
+            "\treturn v;\n"
+            "}\n"
+            "static __forceinline void FngoWr(WORD a, BYTE v)\n"
+            "{\n"
+            "\tif (fngo_dbg_access) fngo_dbg_access(a, v, 1);\n"
+            "}\n"
+            "\n"
+            "// 6502 & no debugger\n"
+            "#define READ(addr) FngoRd(addr, _READ_WITH_IO_F8xx(addr))\n"
+            "#define WRITE(value) { FngoWr(addr, (BYTE)(value)); _WRITE_WITH_IO_F8xx(value) }\n",
+        ),
+        (
+            "// 6502 & no debugger & alt read/write support\n"
+            "#define CPU_ALT\n"
+            "#define READ(addr) _READ_ALT(addr)\n"
+            "#define WRITE(value) _WRITE_ALT(value)\n",
+            "// 6502 & no debugger & alt read/write support\n"
+            "#define CPU_ALT\n"
+            "#define READ(addr) FngoRd(addr, _READ_ALT(addr))\n"
+            "#define WRITE(value) { FngoWr(addr, (BYTE)(value)); _WRITE_ALT(value) }\n",
+        ),
+        (
+            "// 65C02 & no debugger\n"
+            "#define READ(addr) _READ(addr)\n"
+            "#define WRITE(value) _WRITE(value)\n",
+            "// 65C02 & no debugger\n"
+            "#define READ(addr) FngoRd(addr, _READ(addr))\n"
+            "#define WRITE(value) { FngoWr(addr, (BYTE)(value)); _WRITE(value) }\n",
+        ),
+        (
+            "// 65C02 & no debugger & alt read/write support\n"
+            "#define CPU_ALT\n"
+            "#define READ(addr) _READ_ALT(addr)\n"
+            "#define WRITE(value) _WRITE_ALT(value)\n",
+            "// 65C02 & no debugger & alt read/write support\n"
+            "#define CPU_ALT\n"
+            "#define READ(addr) FngoRd(addr, _READ_ALT(addr))\n"
+            "#define WRITE(value) { FngoWr(addr, (BYTE)(value)); _WRITE_ALT(value) }\n",
+        ),
+    ])
+
+    # -- 19: the two halves of retro_run that the stepped path still needs ----
+    # While the debugger engine is engaged the session steps the CPU itself
+    # (apple2host_step_instruction) instead of calling retro_run(), which
+    # would otherwise skip everything retro_run does around the CPU: variable
+    # and input polling before, the screen and the audio after. ourGame lives
+    # in an anonymous namespace, so these are defined next to it.
+    patch(root, "source/frontends/libretro/libretro.cpp", [
+        (
+            "void retro_run(void)\n"
+            "{\n"
+            "    ourGame->updateVariables();\n"
+            "    ourGame->processInputEvents();\n"
+            "    ourGame->executeOneFrame();\n"
+            "    GetFrame().VideoPresentScreen();\n"
+            "    ourGame->writeAudio(ra2::Game::FPS, ra2::Game::SAMPLE_RATE, ra2::Game::CHANNELS);\n"
+            "}\n",
+            "void retro_run(void)\n"
+            "{\n"
+            "    ourGame->updateVariables();\n"
+            "    ourGame->processInputEvents();\n"
+            "    ourGame->executeOneFrame();\n"
+            "    GetFrame().VideoPresentScreen();\n"
+            "    ourGame->writeAudio(ra2::Game::FPS, ra2::Game::SAMPLE_RATE, ra2::Game::CHANNELS);\n"
+            "}\n"
+            "\n"
+            "// [fujinet-go-apple2-desktop] retro_run() split for the debugger's stepped\n"
+            "// path (patch 19): the part before the CPU runs, and the audio after it.\n"
+            "// (The screen is GetFrame().VideoPresentScreen(), reachable from the host.)\n"
+            "extern \"C\" void fngo_run_begin(void)\n"
+            "{\n"
+            "    if (!ourGame) return;\n"
+            "    ourGame->updateVariables();\n"
+            "    ourGame->processInputEvents();\n"
+            "}\n"
+            "\n"
+            "extern \"C\" void fngo_run_audio(void)\n"
+            "{\n"
+            "    if (!ourGame) return;\n"
+            "    ourGame->writeAudio(ra2::Game::FPS, ra2::Game::SAMPLE_RATE, ra2::Game::CHANNELS);\n"
+            "}\n",
+        ),
+    ])
+
 
 def main():
     # cmake/StageAppleWin.cmake hashes this file into .source-info (with

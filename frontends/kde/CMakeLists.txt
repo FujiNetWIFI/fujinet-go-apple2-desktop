@@ -56,6 +56,22 @@ install(FILES data/${KDE_APP_ID}.desktop
 install(FILES data/${KDE_APP_ID}.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
 
+# The Debugger window, on the offscreen platform, against a running session
+# whose RAM holds a hand-assembled loop. Skips (QSKIP) without the Apple II
+# ROMs, like the core's engine tests.
+find_package(Qt6 COMPONENTS Test QUIET)
+if(Qt6Test_FOUND)
+  add_executable(debugger_test debugger_test.cpp debugger/DebuggerWindow.cpp
+                 help/HelpWindow.cpp)
+  target_include_directories(debugger_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(debugger_test PRIVATE apple2session
+                        Qt6::Widgets Qt6::Test)
+  target_compile_options(debugger_test PRIVATE -Wall -Wextra)
+  add_test(NAME debugger_kde COMMAND debugger_test)
+  set_tests_properties(debugger_kde PROPERTIES
+                       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 find_program(DESKTOP_FILE_VALIDATE desktop-file-validate)
 if(DESKTOP_FILE_VALIDATE)
   add_test(NAME desktop_entry_kde

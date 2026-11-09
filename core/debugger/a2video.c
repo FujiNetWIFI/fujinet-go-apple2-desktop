@@ -124,7 +124,7 @@ static void render_text(apple2debug *d, uint16_t base, uint32_t *dst)
     int row, col, gy, gx;
 
     for (row = 0; row < TEXT_ROWS; row++) {
-        apple2debug_read_mem(d, text_row_addr(base, row), line, TEXT_COLS);
+        apple2debug_read(d, text_row_addr(base, row), line, TEXT_COLS);
         for (col = 0; col < TEXT_COLS; col++) {
             int inverse = 0;
             const int idx = glyph_index(line[col], &inverse);
@@ -159,7 +159,7 @@ static void render_lores(apple2debug *d, uint16_t base, uint32_t *dst)
     int row, col, half, py, px;
 
     for (row = 0; row < TEXT_ROWS; row++) {
-        apple2debug_read_mem(d, text_row_addr(base, row), line, TEXT_COLS);
+        apple2debug_read(d, text_row_addr(base, row), line, TEXT_COLS);
         for (col = 0; col < TEXT_COLS; col++) {
             for (half = 0; half < 2; half++) {
                 const uint32_t rgb =
@@ -191,7 +191,7 @@ static void render_hires(apple2debug *d, uint16_t base, uint32_t *dst)
     int y, col, i, x;
 
     for (y = 0; y < H; y++) {
-        apple2debug_read_mem(d, hires_row_addr(base, y), line, TEXT_COLS);
+        apple2debug_read(d, hires_row_addr(base, y), line, TEXT_COLS);
 
         for (col = 0; col < TEXT_COLS; col++) {
             const uint8_t b = line[col];
