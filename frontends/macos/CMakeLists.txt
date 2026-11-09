@@ -14,6 +14,7 @@ add_executable(fujinet-go-apple2-macos MACOSX_BUNDLE
   DisplayView.m
   help/HelpWindow.m
   debugger/DebuggerWindow.m
+  debugger/VideoTab.m
 )
 set_target_properties(fujinet-go-apple2-macos PROPERTIES
   OUTPUT_NAME "FujiNet Go Apple II"

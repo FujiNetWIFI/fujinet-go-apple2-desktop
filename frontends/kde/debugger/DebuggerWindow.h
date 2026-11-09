@@ -33,6 +33,9 @@
 #include "apple2debug.h"
 #include "apple2session.h"
 
+class VideoTab;
+class QLabel;
+
 class DebuggerWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -70,7 +73,7 @@ private:
     void refreshCpu();
     void refreshMem();
     void refreshDisasm();
-    void refreshVideo();
+    void refreshVideo(bool force);
     void refreshBps();
     void refreshWatches(bool force);
     void refreshSlots();
@@ -99,7 +102,10 @@ private:
     void setFlag(int id, bool on);
     void memGoto();
     void memSearch(bool backward);
-    void showInMemory(uint16_t lo, uint16_t hi);
+    /* bank: an APPLE2_BANK_*, or -1 to keep the chooser as it is */
+    void showInMemory(uint16_t lo, uint16_t hi, int bank = -1);
+    void setMemBank(int bank);
+    void revealMemory();
     void popOut(int tab);
     void dock(int tab);
     int currentTab() const;
@@ -142,6 +148,9 @@ private:
     QPlainTextEdit *m_mem = nullptr;
     QLineEdit *m_memGoto = nullptr, *m_memAddr = nullptr, *m_memVal = nullptr;
     int m_memTop = 0;
+    QComboBox *m_memBank = nullptr;     /* APPLE2_BANK_*; the combo's index is the bank */
+    QLabel *m_memTitle = nullptr;
+    int memBank() const;
     bool m_hl = false;                  /* a range is highlighted in the dump */
     uint16_t m_hlLo = 0, m_hlHi = 0;
     QComboBox *m_srchKind = nullptr;
@@ -158,22 +167,9 @@ private:
     int m_wheel = 0;                    /* wheel travel not yet a row */
     std::vector<uint16_t> m_lineAddr;
 
-    /* video pages */
-    QComboBox *m_viewPick = nullptr;
-    QLabel *m_viewPic = nullptr, *m_viewNote = nullptr;
-    std::vector<uint32_t> m_viewFb;
-    /* the click-to-inspect: the page drawn at 2x (no marks), what is under
-     * the mouse and what is pinned */
-    QImage m_viewImg;
-    QLabel *m_viewHoverTxt = nullptr, *m_viewPinTxt = nullptr, *m_viewMsg = nullptr;
-    bool m_viewHover = false, m_viewPinned = false;
-    apple2debug_pixel m_viewHoverPx = {}, m_viewPinPx = {};
-    int m_viewPinX = 0, m_viewPinY = 0;
-    void viewHover(int x, int y);       /* picture coords, or -1 to clear */
-    void viewPin(int x, int y);
-    void viewUnpin();
-    void viewBreak(int x, int y);
-    void viewDraw();
+    /* video: the tab owns its picture, inspector and tables */
+    VideoTab *m_video = nullptr;
+    bool m_videoForce = true;           /* the tab was just shown: redraw everything */
 
     /* breakpoints */
     QTableWidget *m_bpTable = nullptr;

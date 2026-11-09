@@ -26,6 +26,7 @@ add_executable(fujinet-go-apple2-kde
   FujiNetWindows.cpp
   help/HelpWindow.cpp
   debugger/DebuggerWindow.cpp
+  debugger/VideoTab.cpp
 )
 
 target_link_libraries(fujinet-go-apple2-kde PRIVATE
@@ -62,6 +63,7 @@ install(FILES data/${KDE_APP_ID}.metainfo.xml
 find_package(Qt6 COMPONENTS Test QUIET)
 if(Qt6Test_FOUND)
   add_executable(debugger_test debugger_test.cpp debugger/DebuggerWindow.cpp
+                 debugger/VideoTab.cpp
                  help/HelpWindow.cpp)
   target_include_directories(debugger_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(debugger_test PRIVATE apple2session

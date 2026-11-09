@@ -459,9 +459,11 @@ colour). On the Screen view the pixel is mapped onto the same cell. **Click**
 to pin that byte and click it again to unpin; a pinned byte keeps updating as
 the machine runs.
 
-**Break on writes** adds Write breakpoints on the inspected byte: its main
-address, and its aux address too in the 80-column and double modes (the CPU
-writes both through the same address, with RAMWRT or 80STORE choosing the bank).
+**Break on writes** (or a double-click on the picture) adds Write breakpoints
+on the inspected byte: its main address, and its aux address too in the
+80-column and double modes (the CPU writes both through the same address, with
+RAMWRT or 80STORE choosing the bank). **Show in Memory** jumps the Memory tab to
+the byte, and **Unpin** drops the pin.
 
 The tables:
 

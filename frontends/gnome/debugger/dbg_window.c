@@ -48,7 +48,9 @@
 #include "apple2debug.h"
 #include "../window.h"
 #include "../help/help_window.h"
+#include "dbg_video.h"
 #include "apple2memtools.h"
+#include "apple2vidtab.h"
 
 #define DISASM_WINDOW 48
 #define NREGS 6
@@ -94,6 +96,11 @@ typedef struct {
     int mem_base;
     gboolean mem_hl;          /* a range is highlighted (Go to, a search hit, a watch) */
     int mem_hl_lo, mem_hl_hi;
+    GtkDropDown *mem_bank_pick;   /* the bank chooser */
+    GtkLabel *mem_head;       /* names the bank and its range */
+    int mem_bank;             /* an apple2debug_bank; APPLE2_BANK_CURRENT by default */
+    unsigned mem_bank_valid;  /* which banks the chooser labels as present */
+    gboolean mem_bank_sync;   /* the chooser is being set from code */
     GtkDropDown *srch_kind;
     GtkEntry *srch_entry;
     GtkLabel *srch_note;
@@ -111,19 +118,6 @@ typedef struct {
     int line_addr[DISASM_WINDOW * 2];   /* per buffer line; -1 for a label line */
     int line_count;
     int selected;             /* the selected row's address, -1 none */
-
-    /* video */
-    GtkDropDown *view_pick;
-    GtkPicture *view_pic;
-    uint32_t *view_fb, *view_last;
-    uint32_t *view_mark, *view_big;   /* last + outlines; and that scaled 2x */
-    gboolean have_view;
-    GtkLabel *vi_hover, *vi_pin, *vi_status;
-    gboolean hov_on, pin_on;
-    int hov_x, hov_y, pin_x, pin_y;        /* picture coords of the probe */
-    apple2debug_pixel hov, pin;
-    int hov_addr;                          /* last hovered byte, -1 none */
-    int drawn_hov[4], drawn_pin[4];        /* outlines in the shown texture */
 
     /* breakpoints */
     GtkListBox *bp_list;
@@ -478,6 +472,36 @@ static void refresh_cpu(DbgWin *w)
     gtk_label_set_text(w->beam, buf);
 }
 
+/* The bank chooser lists every bank; the ones this machine lacks say so. */
+static unsigned mem_bank_validity(DbgWin *w)
+{
+    unsigned m = 0;
+    int i;
+    for (i = 0; i < APPLE2_BANK_COUNT; i++)
+        if (apple2debug_bank_valid(w->dbg, i)) m |= 1u << i;
+    return m;
+}
+
+static void mem_bank_labels(DbgWin *w)
+{
+    const unsigned m = mem_bank_validity(w);
+    GtkStringList *l;
+    char *names[APPLE2_BANK_COUNT + 1];
+    int i;
+    if (m == w->mem_bank_valid && w->mem_bank_valid) return;
+    w->mem_bank_valid = m;
+    for (i = 0; i < APPLE2_BANK_COUNT; i++)
+        names[i] = (m & (1u << i)) ? g_strdup(apple2debug_bank_name(i))
+                                   : g_strdup_printf("%s (absent)", apple2debug_bank_name(i));
+    names[APPLE2_BANK_COUNT] = NULL;
+    l = GTK_STRING_LIST(gtk_drop_down_get_model(w->mem_bank_pick));
+    w->mem_bank_sync = TRUE;
+    gtk_string_list_splice(l, 0, g_list_model_get_n_items(G_LIST_MODEL(l)), (const char *const *)names);
+    gtk_drop_down_set_selected(w->mem_bank_pick, (guint)w->mem_bank);
+    w->mem_bank_sync = FALSE;
+    for (i = 0; i < APPLE2_BANK_COUNT; i++) g_free(names[i]);
+}
+
 /* The dump: a row is "AAAA  " then 3 columns per byte, then the text. The
  * highlighted range gets the accent background on its bytes (hex and text),
  * with the gap between two highlighted bytes filled so it reads as a bar. */
@@ -486,19 +510,33 @@ static void refresh_mem(DbgWin *w)
     uint8_t data[MEM_PAGE];
     GString *str = g_string_new(NULL);
     GtkTextBuffer *b = gtk_text_view_get_buffer(w->mem_view);
+    uint16_t blo = 0, bhi = 0xFFFF;
+    char head[160];
     int row, col;
 
+    mem_bank_labels(w);
     memset(data, 0, sizeof data);
-    apple2debug_read(w->dbg, (uint16_t)w->mem_base, data, MEM_PAGE);
+    if (w->mem_bank == APPLE2_BANK_CURRENT)
+        apple2debug_read(w->dbg, (uint16_t)w->mem_base, data, MEM_PAGE);
+    else {
+        apple2debug_bank_range(w->dbg, w->mem_bank, &blo, &bhi);
+        apple2debug_read_bank(w->dbg, w->mem_bank, (uint16_t)w->mem_base, data, MEM_PAGE);
+    }
+    g_snprintf(head, sizeof head, "Bank: %s   $%04X-$%04X", apple2debug_bank_name(w->mem_bank), blo, bhi);
+    gtk_label_set_text(w->mem_head, head);
     g_string_append(str, "      0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F\n");
     for (row = 0; row < MEM_ROWS; row++) {
         g_string_append_printf(str, "%04X  ", w->mem_base + row * 16);
-        for (col = 0; col < 16; col++)
-            g_string_append_printf(str, "%02X ", data[row * 16 + col]);
+        for (col = 0; col < 16; col++) {
+            const int a = w->mem_base + row * 16 + col;
+            if (a < blo || a > bhi) g_string_append(str, "-- ");   /* outside the bank */
+            else g_string_append_printf(str, "%02X ", data[row * 16 + col]);
+        }
         g_string_append_c(str, ' ');
         for (col = 0; col < 16; col++) {
+            const int a = w->mem_base + row * 16 + col;
             uint8_t ch = data[row * 16 + col] & 0x7F;   /* Apple II text has bit 7 set */
-            g_string_append_c(str, (ch >= 0x20 && ch <= 0x7E) ? (char)ch : '.');
+            g_string_append_c(str, (a >= blo && a <= bhi && ch >= 0x20 && ch <= 0x7E) ? (char)ch : '.');
         }
         g_string_append_c(str, '\n');
     }
@@ -614,207 +652,9 @@ static void refresh_disasm(DbgWin *w)
     }
 }
 
-#define VIEW_ZOOM 2
-
 static void show_in_memory(DbgWin *w, int lo, int hi);
+static void show_in_memory_bank(DbgWin *w, int bank, int lo, int hi);
 static void show_tab(DbgWin *w, int tab);
-
-static void outline(uint32_t *fb, const int *r, uint32_t colour)
-{
-    int x, y;
-    for (x = r[0]; x < r[0] + r[2]; x++) {
-        if (x < 0 || x >= APPLE2VIEW_WIDTH) continue;
-        if (r[1] >= 0 && r[1] < APPLE2VIEW_HEIGHT) fb[r[1] * APPLE2VIEW_WIDTH + x] = colour;
-        y = r[1] + r[3] - 1;
-        if (y >= 0 && y < APPLE2VIEW_HEIGHT) fb[y * APPLE2VIEW_WIDTH + x] = colour;
-    }
-    for (y = r[1]; y < r[1] + r[3]; y++) {
-        if (y < 0 || y >= APPLE2VIEW_HEIGHT) continue;
-        if (r[0] >= 0 && r[0] < APPLE2VIEW_WIDTH) fb[y * APPLE2VIEW_WIDTH + r[0]] = colour;
-        x = r[0] + r[2] - 1;
-        if (x >= 0 && x < APPLE2VIEW_WIDTH) fb[y * APPLE2VIEW_WIDTH + x] = colour;
-    }
-}
-
-static void rect_of(const apple2debug_pixel *p, gboolean on, int *r)
-{
-    r[0] = on ? p->rx : 0; r[1] = on ? p->ry : 0;
-    r[2] = on ? p->rw : 0; r[3] = on ? p->rh : 0;
-}
-
-/* The cached page with the pin (yellow) and hover (white) outlines, scaled by
- * whole pixels so it stays crisp, and shown. */
-static void present_video(DbgWin *w)
-{
-    GdkTexture *tex;
-    GBytes *bytes;
-    const int bw = APPLE2VIEW_WIDTH * VIEW_ZOOM, bh = APPLE2VIEW_HEIGHT * VIEW_ZOOM;
-    int x, y;
-
-    memcpy(w->view_mark, w->view_last,
-           (size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT * sizeof(uint32_t));
-    rect_of(&w->pin, w->pin_on && w->pin.valid, w->drawn_pin);
-    rect_of(&w->hov, w->hov_on && w->hov.valid, w->drawn_hov);
-    if (w->drawn_pin[2] > 0) outline(w->view_mark, w->drawn_pin, 0x00FFEB3Bu);
-    if (w->drawn_hov[2] > 0) outline(w->view_mark, w->drawn_hov, 0x00FFFFFFu);
-    for (y = 0; y < bh; y++) {
-        const uint32_t *src = w->view_mark + (y / VIEW_ZOOM) * APPLE2VIEW_WIDTH;
-        uint32_t *dst = w->view_big + (size_t)y * bw;
-        for (x = 0; x < bw; x++) dst[x] = src[x / VIEW_ZOOM];
-    }
-    bytes = g_bytes_new(w->view_big, (gsize)bw * bh * sizeof(uint32_t));
-    /* the engine's XRGB8888 is a uint32 0x00RRGGBB: B,G,R,X in memory on a
-     * little-endian host, which is GDK_MEMORY_B8G8R8X8 with no conversion */
-#if G_BYTE_ORDER == G_BIG_ENDIAN
-    tex = gdk_memory_texture_new(bw, bh, GDK_MEMORY_X8R8G8B8, bytes, (gsize)bw * sizeof(uint32_t));
-#else
-    tex = gdk_memory_texture_new(bw, bh, GDK_MEMORY_B8G8R8X8, bytes, (gsize)bw * sizeof(uint32_t));
-#endif
-    g_bytes_unref(bytes);
-    gtk_picture_set_paintable(w->view_pic, GDK_PAINTABLE(tex));
-    g_object_unref(tex);
-}
-
-static apple2debug_view current_view(DbgWin *w)
-{
-    guint sel = gtk_drop_down_get_selected(w->view_pick);
-    return (apple2debug_view)(sel == GTK_INVALID_LIST_POSITION ? 0 : sel);
-}
-
-static void set_vi_label(GtkLabel *l, const char *head, const apple2debug_pixel *p, gboolean on)
-{
-    if (!on || !p->valid) {
-        gtk_label_set_text(l, head);
-        return;
-    }
-    char *t = g_strdup_printf("%s\n%s", head, p->text);
-    gtk_label_set_text(l, t);
-    g_free(t);
-}
-
-/* Re-read the probes (the pin live) and redraw if an outline moved. Returns
- * TRUE when the picture needs presenting. */
-static gboolean update_probes(DbgWin *w)
-{
-    int h[4], p[4];
-    apple2debug_view v = current_view(w);
-
-    if (w->pin_on && apple2debug_view_inspect(w->dbg, v, w->pin_x, w->pin_y, &w->pin) != 0)
-        w->pin.valid = 0;
-    set_vi_label(w->vi_pin, "Pinned", &w->pin, w->pin_on);
-    if (!w->pin_on) gtk_label_set_text(w->vi_pin, "Pinned: click the picture");
-    if (w->hov_on) {
-        if (apple2debug_view_inspect(w->dbg, v, w->hov_x, w->hov_y, &w->hov) != 0)
-            w->hov.valid = 0;
-        if (w->hov.valid) w->hov_addr = w->hov.addr;
-    }
-    set_vi_label(w->vi_hover, "Under the pointer", &w->hov, w->hov_on);
-    rect_of(&w->pin, w->pin_on && w->pin.valid, p);
-    rect_of(&w->hov, w->hov_on && w->hov.valid, h);
-    return memcmp(h, w->drawn_hov, sizeof h) != 0 || memcmp(p, w->drawn_pin, sizeof p) != 0;
-}
-
-/* Decode whichever video page the dropdown names. This shows a PAGE as the CPU
- * sees it, not what the machine is displaying -- which is the point: it is how
- * you see the buffer a program is drawing into before it flips to it. Redrawn
- * only when the decoded pixels or an outline changed. */
-static void refresh_video(DbgWin *w)
-{
-    const gsize size = (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT * sizeof(uint32_t);
-    gboolean changed = FALSE;
-
-    if (apple2debug_render_view(w->dbg, current_view(w), w->view_fb) != 0) return;
-    if (!w->have_view || memcmp(w->view_fb, w->view_last, size) != 0) {
-        memcpy(w->view_last, w->view_fb, size);
-        w->have_view = TRUE;
-        changed = TRUE;
-    }
-    if (update_probes(w)) changed = TRUE;
-    if (changed) present_video(w);
-}
-
-static void view_probe(DbgWin *w, gboolean hover, int x, int y)
-{
-    if (hover) { w->hov_on = TRUE; w->hov_x = x; w->hov_y = y; }
-    else { w->pin_on = TRUE; w->pin_x = x; w->pin_y = y; }
-    if (w->have_view && update_probes(w)) present_video(w);
-}
-
-static void on_vid_motion(GtkEventControllerMotion *c, double x, double y, gpointer ud)
-{
-    DbgWin *w = ud;
-    (void)c;
-    view_probe(w, TRUE, (int)(x / VIEW_ZOOM), (int)(y / VIEW_ZOOM));
-}
-
-static void on_vid_leave(GtkEventControllerMotion *c, gpointer ud)
-{
-    DbgWin *w = ud;
-    (void)c;
-    w->hov_on = FALSE;
-    if (w->have_view && update_probes(w)) present_video(w);
-}
-
-static void unpin_video(DbgWin *w)
-{
-    w->pin_on = FALSE;
-    if (w->have_view && update_probes(w)) present_video(w);
-}
-
-static void on_vid_unpin(GtkButton *b, gpointer ud)
-{
-    (void)b;
-    unpin_video(ud);
-}
-
-static void on_vid_click(GtkGestureClick *g, int n, double dx, double dy, gpointer ud)
-{
-    DbgWin *w = ud;
-    int x = (int)(dx / VIEW_ZOOM), y = (int)(dy / VIEW_ZOOM);
-    apple2debug_pixel here;
-    (void)g;
-
-    if (apple2debug_view_inspect(w->dbg, current_view(w), x, y, &here) != 0 || !here.valid) return;
-    if (n == 1) {
-        gboolean same = w->pin_on && w->pin.valid && w->pin.addr == here.addr &&
-                        w->pin.rx == here.rx && w->pin.ry == here.ry;
-        if (same) unpin_video(w);
-        else view_probe(w, FALSE, x, y);
-    } else if (n == 2) {
-        apple2debug_breakpoint bps[256];
-        char err[160] = "";
-        int i, cnt = apple2debug_breakpoint_list(w->dbg, bps, 256), found = 0;
-        char *msg;
-
-        view_probe(w, FALSE, x, y);    /* the first click's toggle may have undone it */
-        for (i = 0; i < cnt; i++)
-            if (bps[i].enabled && bps[i].type == APPLE2DEBUG_BP_WRITE &&
-                bps[i].start == here.addr && bps[i].end == here.addr && !bps[i].condition[0])
-                found = 1;
-        if (!found &&
-            apple2debug_breakpoint_add(w->dbg, APPLE2DEBUG_BP_WRITE, here.addr, here.addr, "",
-                                       err, sizeof err) < 0) {
-            gtk_label_set_text(w->vi_status, err);
-            return;
-        }
-        msg = g_strdup_printf("Break on writes to $%04X", here.addr);
-        gtk_label_set_text(w->vi_status, msg);
-        g_free(msg);
-    }
-}
-
-static void on_vid_memory(GtkButton *b, gpointer ud)
-{
-    DbgWin *w = ud;
-    int addr = (w->pin_on && w->pin.valid) ? w->pin.addr : w->hov_addr;
-    (void)b;
-    if (addr < 0) {
-        gtk_label_set_text(w->vi_status, "Point at the picture first");
-        return;
-    }
-    show_in_memory(w, addr, addr);
-    show_tab(w, TAB_MEMORY);
-}
 
 static void grid_cell(GtkGrid *g, int col, int row, const char *text, gboolean head)
 {
@@ -1063,12 +903,13 @@ static void on_wt_memory(GtkButton *b, gpointer ud)
 {
     DbgWin *w = ud;
     uint16_t lo, hi;
-    if (!apple2watch_range(w->dbg, GPOINTER_TO_INT(g_object_get_data(G_OBJECT(b), "wt-idx")),
-                          &lo, &hi)) {
+    int bank;
+    if (!apple2watch_range_bank(w->dbg, GPOINTER_TO_INT(g_object_get_data(G_OBJECT(b), "wt-idx")),
+                                &bank, &lo, &hi)) {
         toast(w, "That watch does not resolve to an address yet");
         return;
     }
-    show_in_memory(w, lo, hi);
+    show_in_memory_bank(w, bank, lo, hi);
     show_tab(w, TAB_MEMORY);
 }
 
@@ -1273,7 +1114,7 @@ static void refresh_tab(DbgWin *w, int tab)
     case TAB_SLOTS: refresh_slots(w); break;
     case TAB_TRACE: refresh_hist(w, 0, FALSE); break;
     case TAB_HISTORY: refresh_hist(w, 1, FALSE); break;
-    case TAB_VIDEO: refresh_video(w); break;
+    case TAB_VIDEO: dbg_video_refresh(w->pages[TAB_VIDEO], FALSE); break;
     case TAB_FUJINET: refresh_fujinet(w, FALSE); break;
     default: break;
     }
@@ -1324,6 +1165,7 @@ static gboolean tick_refresh(gpointer ud)
         attach_and_refresh(w);
         return G_SOURCE_CONTINUE;
     }
+    if (tab_visible(w, TAB_VIDEO)) dbg_video_refresh(w->pages[TAB_VIDEO], FALSE);
     gen = apple2debug_generation(w->dbg);
     stopped = apple2debug_is_stopped(w->dbg) != 0;
     {   /* a new stop brings the disassembly back to the PC, wherever it was scrolled */
@@ -1590,8 +1432,12 @@ static void on_mem_write(GtkEntry *entry, gpointer ud)
     }
     ok = addr && n > 0 && parse_addr(w, addr, &a, err, sizeof err);
     if (ok) {
-        for (i = 0; i < n; i++)
-            apple2debug_write(w->dbg, (uint16_t)(a + i), bytes[i]);
+        for (i = 0; i < n; i++) {
+            if (w->mem_bank == APPLE2_BANK_CURRENT)
+                apple2debug_write(w->dbg, (uint16_t)(a + i), bytes[i]);
+            else
+                apple2debug_write_bank(w->dbg, w->mem_bank, (uint16_t)(a + i), bytes[i]);
+        }
         gtk_editable_set_text(GTK_EDITABLE(entry), "");
         refresh_now(w);
     } else {
@@ -1602,10 +1448,44 @@ static void on_mem_write(GtkEntry *entry, gpointer ud)
 
 static void mem_set_base(DbgWin *w, int base)
 {
+    int lo = 0, hi = 0xFFFF;
+    uint16_t blo, bhi;
+    if (w->mem_bank != APPLE2_BANK_CURRENT && apple2debug_bank_range(w->dbg, w->mem_bank, &blo, &bhi)) {
+        lo = blo;
+        hi = bhi;
+    }
+    if (base > hi + 1 - MEM_PAGE) base = hi + 1 - MEM_PAGE;
+    if (base < lo) base = lo;
     if (base < 0) base = 0;
-    if (base > 0x10000 - MEM_PAGE) base = 0x10000 - MEM_PAGE;
     w->mem_base = base & ~0xF;
     refresh_mem(w);
+}
+
+/* Switch the chooser (and so the dump, Go To, search and poke) to a bank. */
+static void mem_choose_bank(DbgWin *w, int bank)
+{
+    if (bank < 0 || bank >= APPLE2_BANK_COUNT) bank = APPLE2_BANK_CURRENT;
+    mem_bank_labels(w);
+    w->mem_bank_sync = TRUE;
+    gtk_drop_down_set_selected(w->mem_bank_pick, (guint)bank);
+    w->mem_bank_sync = FALSE;
+    if (w->mem_bank != bank) w->mem_hl = FALSE;
+    w->mem_bank = bank;
+}
+
+static void on_mem_bank(GObject *o, GParamSpec *p, gpointer ud)
+{
+    DbgWin *w = ud;
+    int bank = (int)gtk_drop_down_get_selected(w->mem_bank_pick);
+    (void)o; (void)p;
+    if (w->mem_bank_sync || w->closing || bank < 0 || bank >= APPLE2_BANK_COUNT) return;
+    if (!apple2debug_bank_valid(w->dbg, bank)) {
+        toast(w, "This machine has no such bank");
+        mem_choose_bank(w, w->mem_bank);
+        return;
+    }
+    mem_choose_bank(w, bank);
+    mem_set_base(w, w->mem_base);
 }
 
 /* The page holding a range, the range highlighted (a little context above it). */
@@ -1617,16 +1497,73 @@ static void show_in_memory(DbgWin *w, int lo, int hi)
     mem_set_base(w, (lo & ~0xF) - 4 * 16);
 }
 
+static void show_in_memory_bank(DbgWin *w, int bank, int lo, int hi)
+{
+    mem_choose_bank(w, bank);
+    show_in_memory(w, lo, hi);
+}
+
+static gboolean has_bank_prefix(const char *text)
+{
+    int used = 0;
+    char *t = g_strdup(text);
+    gboolean yes = apple2debug_bank_parse(g_strstrip(t), &used) >= 0;
+    g_free(t);
+    return yes;
+}
+
 /* Go to: an address, a label, an expression or a range. */
 static void on_mem_goto(GtkEntry *entry, gpointer ud)
 {
     DbgWin *w = ud;
+    const char *text = gtk_editable_get_text(GTK_EDITABLE(entry));
     uint16_t lo, hi;
-    if (!apple2sym_parse_range(w->dbg, gtk_editable_get_text(GTK_EDITABLE(entry)), &lo, &hi)) {
-        toast(w, "Not an address, a label or a range");
+    int bank;
+    if (!apple2sym_parse_range_bank(w->dbg, text, &bank, &lo, &hi)) {
+        toast(w, "Not an address, a label or a range (prefixes: aux: main: lc1: lc2: lchi: rom:)");
         return;
     }
-    show_in_memory(w, lo, hi);
+    /* a prefix names the bank; without one the chooser keeps its bank */
+    if (!has_bank_prefix(text)) bank = w->mem_bank;
+    if (!apple2debug_bank_valid(w->dbg, bank)) {
+        toast(w, "This machine has no such bank");
+        return;
+    }
+    show_in_memory_bank(w, bank, lo, hi);
+}
+
+/* Next/previous match after/before `from` inside the chosen bank, wrapping once:
+ * 1 found, 0 none, -1 while running. */
+static int search_bank(DbgWin *w, const uint8_t *pat, int n, uint8_t mask, int flags, int from,
+                       int backward, uint16_t *found)
+{
+    uint16_t blo, bhi;
+    uint16_t *hits;
+    int span[2][2], pass, cnt, r = 0;
+
+    if (!apple2debug_bank_range(w->dbg, w->mem_bank, &blo, &bhi)) return 0;
+    if (backward) {   /* before `from`, then from it to the end */
+        span[0][0] = blo; span[0][1] = from - 1;
+        span[1][0] = from; span[1][1] = bhi;
+    } else {          /* after `from`, then the start up to it */
+        span[0][0] = from + 1; span[0][1] = bhi;
+        span[1][0] = blo; span[1][1] = from;
+    }
+    hits = g_new(uint16_t, 0x10000);
+    for (pass = 0; pass < 2 && !r; pass++) {
+        const int lo = span[pass][0] < blo ? blo : span[pass][0];
+        const int hi = span[pass][1] > bhi ? bhi : span[pass][1];
+        if (lo > hi) continue;
+        cnt = apple2debug_search_bank(w->dbg, w->mem_bank, pat, n, mask, flags, (uint16_t)lo,
+                                      (uint16_t)hi, hits, backward ? 0x10000 : 1);
+        if (cnt < 0) { r = -1; break; }
+        if (cnt > 0) {
+            *found = hits[backward ? cnt - 1 : 0];
+            r = 1;
+        }
+    }
+    g_free(hits);
+    return r;
 }
 
 /* Find Next / Find Previous: from the highlight (else the top of the page). */
@@ -1636,7 +1573,8 @@ static void on_search(GtkWidget *button, gpointer ud)
     const int backward = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "back"));
     uint8_t pat[APPLE2SEARCH_MAX], mask;
     int n, flags, r;
-    uint16_t from, found;
+    int from;
+    uint16_t found = 0;
 
     if (!apple2search_parse((int)gtk_drop_down_get_selected(w->srch_kind),
                            gtk_editable_get_text(GTK_EDITABLE(w->srch_entry)),
@@ -1649,10 +1587,13 @@ static void on_search(GtkWidget *button, gpointer ud)
         return;
     }
     if (w->mem_hl)
-        from = (uint16_t)w->mem_hl_lo;
+        from = w->mem_hl_lo;
     else
-        from = backward ? (uint16_t)w->mem_base : (uint16_t)(w->mem_base - 1);
-    r = apple2debug_search_next(w->dbg, pat, n, mask, flags, from, backward, &found);
+        from = backward ? w->mem_base : w->mem_base - 1;
+    if (w->mem_bank == APPLE2_BANK_CURRENT)
+        r = apple2debug_search_next(w->dbg, pat, n, mask, flags, (uint16_t)from, backward, &found);
+    else
+        r = search_bank(w, pat, n, mask, flags, from, backward, &found);
     if (r > 0) {
         char msg[64];
         g_snprintf(msg, sizeof msg, "Found at $%04X", found);
@@ -2215,7 +2156,7 @@ static GtkWidget *build_search_bar(DbgWin *w)
     w->srch_kind = GTK_DROP_DOWN(gtk_drop_down_new_from_strings(kinds));
     gtk_widget_set_tooltip_text(GTK_WIDGET(w->srch_kind), "Hex bytes (A9 00) or text (one byte per character)");
     w->srch_entry = GTK_ENTRY(gtk_entry_new());
-    gtk_entry_set_placeholder_text(w->srch_entry, "search the 64K: A9 00, or text");
+    gtk_entry_set_placeholder_text(w->srch_entry, "search the bank: A9 00, or text");
     gtk_widget_set_hexpand(GTK_WIDGET(w->srch_entry), TRUE);
     g_object_set_data(G_OBJECT(w->srch_entry), "next-button", next);
     g_signal_connect(w->srch_entry, "activate", G_CALLBACK(on_search_activate), w);
@@ -2239,10 +2180,24 @@ static GtkWidget *build_memory(DbgWin *w)
     GtkWidget *mem = mono_view(&w->mem_view, FALSE);
     GtkWidget *edit = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget *up, *down;
+    GtkStringList *banks = gtk_string_list_new(NULL);
+    int bi;
+
+    for (bi = 0; bi < APPLE2_BANK_COUNT; bi++)
+        gtk_string_list_append(banks, apple2debug_bank_name(bi));
+    w->mem_bank_pick = GTK_DROP_DOWN(gtk_drop_down_new(G_LIST_MODEL(banks), NULL));
+    gtk_widget_set_tooltip_text(GTK_WIDGET(w->mem_bank_pick),
+        "Which memory the dump, Go to, search and poke use. Banks are read directly, without "
+        "touching the soft switches.");
+    g_signal_connect(w->mem_bank_pick, "notify::selected", G_CALLBACK(on_mem_bank), w);
+    w->mem_head = GTK_LABEL(gtk_label_new(""));
+    gtk_label_set_xalign(w->mem_head, 0);
+    gtk_widget_add_css_class(GTK_WIDGET(w->mem_head), "dim-label");
+    w->mem_bank = APPLE2_BANK_CURRENT;
 
     w->mem_goto = GTK_ENTRY(gtk_entry_new());
     gtk_editable_set_width_chars(GTK_EDITABLE(w->mem_goto), 16);
-    gtk_entry_set_placeholder_text(w->mem_goto, "$0300 / label / lo-hi");
+    gtk_entry_set_placeholder_text(w->mem_goto, "$0300 / aux:$0400 / label");
     g_signal_connect(w->mem_goto, "activate", G_CALLBACK(on_mem_goto), w);
     w->mem_write = GTK_ENTRY(gtk_entry_new());
     gtk_editable_set_width_chars(GTK_EDITABLE(w->mem_write), 14);
@@ -2254,6 +2209,7 @@ static GtkWidget *build_memory(DbgWin *w)
     g_object_set_data(G_OBJECT(down), "delta", GINT_TO_POINTER(1));
     g_signal_connect(up, "clicked", G_CALLBACK(on_mem_page), w);
     g_signal_connect(down, "clicked", G_CALLBACK(on_mem_page), w);
+    gtk_box_append(GTK_BOX(edit), labeled("Bank", GTK_WIDGET(w->mem_bank_pick)));
     gtk_box_append(GTK_BOX(edit), labeled("Go to", GTK_WIDGET(w->mem_goto)));
     gtk_box_append(GTK_BOX(edit), up);
     gtk_box_append(GTK_BOX(edit), down);
@@ -2261,6 +2217,7 @@ static GtkWidget *build_memory(DbgWin *w)
 
     gtk_box_append(GTK_BOX(box), edit);
     gtk_box_append(GTK_BOX(box), build_search_bar(w));
+    gtk_box_append(GTK_BOX(box), GTK_WIDGET(w->mem_head));
     gtk_box_append(GTK_BOX(box), mem);
     /* the highlight covers a few bytes, not a paragraph */
     gtk_text_buffer_create_tag(gtk_text_view_get_buffer(w->mem_view), "mark",
@@ -2317,101 +2274,12 @@ static GtkWidget *build_disasm(DbgWin *w)
     return padded(box);
 }
 
-static void on_view_changed(GObject *o, GParamSpec *p, gpointer ud)
+/* The Video tab's "Show in Memory": the Memory tab at addr in bank. */
+static void video_show_memory(int bank, int addr, gpointer ud)
 {
     DbgWin *w = ud;
-    (void)o; (void)p;
-    w->have_view = FALSE;
-    w->pin_on = FALSE;
-    w->hov_on = FALSE;
-    if (!w->closing) refresh_video(w);
-}
-
-/* The page viewer. The list of pages comes from the engine, so a view added
- * there shows up here with no edit. */
-static GtkWidget *build_video(DbgWin *w)
-{
-    GtkStringList *views = gtk_string_list_new(NULL);
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    GtkWidget *hint = gtk_label_new("The page as the CPU sees it now, not what the screen is "
-                                    "showing: find the buffer a program draws into.");
-    int i;
-
-    for (i = 0; apple2debug_view_name(i); i++)
-        gtk_string_list_append(views, apple2debug_view_name(i));
-    w->view_pick = GTK_DROP_DOWN(gtk_drop_down_new(G_LIST_MODEL(views), NULL));
-    g_signal_connect(w->view_pick, "notify::selected", G_CALLBACK(on_view_changed), w);
-    w->view_fb = g_new0(uint32_t, (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT);
-    w->view_last = g_new0(uint32_t, (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT);
-    w->view_mark = g_new0(uint32_t, (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT);
-    w->view_big = g_new0(uint32_t, (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT * VIEW_ZOOM * VIEW_ZOOM);
-    w->hov_addr = -1;
-    /* a fixed-size picture showing a texture already scaled by whole pixels,
-     * so widget coordinates map exactly (divide by VIEW_ZOOM) and stay crisp */
-    w->view_pic = GTK_PICTURE(gtk_picture_new());
-    gtk_picture_set_content_fit(w->view_pic, GTK_CONTENT_FIT_FILL);
-    gtk_picture_set_can_shrink(w->view_pic, FALSE);
-    gtk_widget_set_size_request(GTK_WIDGET(w->view_pic), APPLE2VIEW_WIDTH * VIEW_ZOOM,
-                                APPLE2VIEW_HEIGHT * VIEW_ZOOM);
-    gtk_widget_set_halign(GTK_WIDGET(w->view_pic), GTK_ALIGN_START);
-    gtk_widget_set_valign(GTK_WIDGET(w->view_pic), GTK_ALIGN_START);
-    {
-        GtkEventController *motion = gtk_event_controller_motion_new();
-        GtkGesture *click = gtk_gesture_click_new();
-        g_signal_connect(motion, "motion", G_CALLBACK(on_vid_motion), w);
-        g_signal_connect(motion, "leave", G_CALLBACK(on_vid_leave), w);
-        gtk_widget_add_controller(GTK_WIDGET(w->view_pic), motion);
-        g_signal_connect(click, "pressed", G_CALLBACK(on_vid_click), w);
-        gtk_widget_add_controller(GTK_WIDGET(w->view_pic), GTK_EVENT_CONTROLLER(click));
-    }
-    gtk_widget_add_css_class(hint, "dim-label");
-    gtk_label_set_xalign(GTK_LABEL(hint), 0);
-    gtk_label_set_wrap(GTK_LABEL(hint), TRUE);
-    gtk_box_append(GTK_BOX(row), gtk_label_new("View"));
-    gtk_box_append(GTK_BOX(row), GTK_WIDGET(w->view_pick));
-    gtk_box_append(GTK_BOX(box), row);
-    {
-        GtkWidget *main = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-        GtkWidget *side = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-        GtkWidget *btns = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-        GtkWidget *mem = gtk_button_new_with_label("Show in Memory");
-        GtkWidget *unpin = gtk_button_new_with_label("Unpin");
-        GtkLabel **ls[3] = { &w->vi_hover, &w->vi_pin, &w->vi_status };
-        const char *init[3] = { "Under the pointer", "Pinned: click the picture", "" };
-        int k;
-
-        for (k = 0; k < 3; k++) {
-            *ls[k] = GTK_LABEL(gtk_label_new(init[k]));
-            gtk_label_set_xalign(*ls[k], 0);
-            gtk_label_set_yalign(*ls[k], 0);
-            if (k < 2) {
-                gtk_widget_add_css_class(GTK_WIDGET(*ls[k]), "monospace");
-                gtk_label_set_selectable(*ls[k], TRUE);
-            } else {
-                gtk_widget_add_css_class(GTK_WIDGET(*ls[k]), "apple2-accent-text");
-            }
-        }
-        gtk_widget_set_tooltip_text(mem, "Show the pinned byte (else the hovered one) in the Memory tab");
-        gtk_widget_set_tooltip_text(unpin, "Drop the pin");
-        g_signal_connect(mem, "clicked", G_CALLBACK(on_vid_memory), w);
-        g_signal_connect(unpin, "clicked", G_CALLBACK(on_vid_unpin), w);
-        gtk_box_append(GTK_BOX(btns), mem);
-        gtk_box_append(GTK_BOX(btns), unpin);
-        gtk_box_append(GTK_BOX(side), btns);
-        gtk_box_append(GTK_BOX(side), GTK_WIDGET(w->vi_hover));
-        gtk_box_append(GTK_BOX(side), GTK_WIDGET(w->vi_pin));
-        gtk_box_append(GTK_BOX(side), GTK_WIDGET(w->vi_status));
-        gtk_widget_set_hexpand(side, TRUE);
-        gtk_box_append(GTK_BOX(main), GTK_WIDGET(w->view_pic));
-        gtk_box_append(GTK_BOX(main), side);
-        gtk_box_append(GTK_BOX(box), main);
-    }
-    gtk_label_set_text(GTK_LABEL(hint), "The page as the CPU sees it now, not what the screen is "
-                       "showing: find the buffer a program draws into. Hover to inspect, click "
-                       "to pin, double-click to break on writes.");
-    gtk_box_append(GTK_BOX(box), hint);
-    return padded(box);
+    show_in_memory_bank(w, bank, addr, addr);
+    show_tab(w, TAB_MEMORY);
 }
 
 static GtkWidget *build_breaks(DbgWin *w)
@@ -2616,10 +2484,6 @@ static void on_win_finalized(gpointer data, GObject *where)
     if (w->wt_labels) g_ptr_array_unref(w->wt_labels);
     if (w->slot_sig) g_string_free(w->slot_sig, TRUE);
     if (w->map_sig) g_string_free(w->map_sig, TRUE);
-    g_free(w->view_fb);
-    g_free(w->view_last);
-    g_free(w->view_mark);
-    g_free(w->view_big);
     g_free(w);
 }
 
@@ -2708,7 +2572,7 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
     w->pages[TAB_SLOTS] = build_slots(w);
     w->pages[TAB_TRACE] = build_hist(w, 0);
     w->pages[TAB_HISTORY] = build_hist(w, 1);
-    w->pages[TAB_VIDEO] = build_video(w);
+    w->pages[TAB_VIDEO] = dbg_video_new(w->session, video_show_memory, w);
     w->pages[TAB_FUJINET] = build_fujinet(w);
     for (i = 0; i < NTABS; i++) {
         g_object_set_data(G_OBJECT(w->pages[i]), "tab", GINT_TO_POINTER(i));
@@ -2747,20 +2611,25 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
         uint16_t lo, hi;
         if (wt && *wt) apple2watch_add(wt);
         if (wb && *wb && apple2sym_parse_range(w->dbg, wb, &lo, &hi)) break_on_change(w, lo, hi);
-        if (mg && *mg && apple2sym_parse_range(w->dbg, mg, &lo, &hi)) show_in_memory(w, lo, hi);
+        if (mg && *mg) {
+            int bank;
+            if (apple2sym_parse_range_bank(w->dbg, mg, &bank, &lo, &hi))
+                show_in_memory_bank(w, has_bank_prefix(mg) ? bank : w->mem_bank, lo, hi);
+        }
         const char *vw = g_getenv("APPLE2_DEBUGGER_VIEW");
         if (g_getenv("APPLE2_HISTORY")) apple2debug_trace_enable(w->dbg, 1);
         if (vw && *vw) {
             int idx = atoi(vw);
-            if (idx >= 0 && idx < APPLE2VIEW_COUNT)
-                gtk_drop_down_set_selected(w->view_pick, (guint)idx);
+            /* text1, text2, lores1, lores2, hires1, hires2 */
+            static const int vmode[6] = { APPLE2VID_M_TEXT40, APPLE2VID_M_TEXT40, APPLE2VID_M_LORES,
+                                          APPLE2VID_M_LORES, APPLE2VID_M_HIRES, APPLE2VID_M_HIRES };
+            if (idx >= 0 && idx < 6) dbg_video_select(w->pages[TAB_VIDEO], vmode[idx], idx % 2 + 1);
         }
         {
             const char *vp = g_getenv("APPLE2_VIDEO_PIN");
             int px, py;
             if (vp && sscanf(vp, "%d,%d", &px, &py) == 2) {
-                refresh_video(w);
-                view_probe(w, FALSE, px, py);
+                dbg_video_pin(w->pages[TAB_VIDEO], px, py);
             }
         }
     }

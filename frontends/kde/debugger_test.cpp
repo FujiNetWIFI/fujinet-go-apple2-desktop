@@ -40,6 +40,7 @@
 #include "apple2debug.h"
 #include "apple2memtools.h"
 #include "apple2session.h"
+#include "apple2vidtab.h"
 #include "debugger/DebuggerWindow.h"
 
 namespace {
@@ -937,86 +938,413 @@ private slots:
         shot(QStringLiteral("slots"));
     }
 
-    /* Video: a page of video memory as a picture, whichever the combo names. */
-    void videoTab()
+private:
+    /* ---- the Video tab ---- */
+
+    QWidget *videoPage() { return m_tabs->widget(8); }
+    template <class T> T *vw(const char *name) { return videoPage()->findChild<T *>(QString::fromLatin1(name)); }
+    void showVideo()
     {
         m_tabs->setCurrentIndex(8);
-        QTRY_VERIFY_WITH_TIMEOUT(m_tabs->currentWidget()->isVisible(), 1000);
-        auto *pick = m_tabs->currentWidget()->findChild<QComboBox *>();
-        QVERIFY(pick);
-        QCOMPARE(pick->count(), (int)APPLE2VIEW_COUNT);
-        QCOMPARE(pick->itemText(0), QString::fromUtf8(apple2debug_view_name(0)));
-        QLabel *pic = nullptr;
-        for (QLabel *l : m_tabs->currentWidget()->findChildren<QLabel *>())
-            if (l->minimumWidth() >= APPLE2VIEW_WIDTH) pic = l;
-        QVERIFY(pic);
-        for (int i = 0; i < pick->count(); ++i) {
-            pick->setCurrentIndex(i);
-            QTRY_VERIFY_WITH_TIMEOUT(!pic->pixmap(Qt::ReturnByValue).isNull(), 2000);
-            QCOMPARE(pic->pixmap(Qt::ReturnByValue).deviceIndependentSize().width(), (qreal)APPLE2VIEW_WIDTH * 2);
+        QTRY_VERIFY_WITH_TIMEOUT(videoPage()->isVisible(), 1000);
+    }
+    static void pickText(QComboBox *c, const QString &text)
+    {
+        const int i = c->findText(text);
+        QVERIFY2(i >= 0, qPrintable(text));
+        c->setCurrentIndex(i);
+    }
+    /* Decoded, Text 40, page 1, zoom 2x, Follow off: byte cell (col, row) is the pixel at 2 * (14 col, 8 row) */
+    void decodedText40(QComboBox *zoomPick = nullptr)
+    {
+        showVideo();
+        pickText(vw<QComboBox>("videoView"), QStringLiteral("Decoded"));
+        pickText(vw<QComboBox>("videoMode"), QStringLiteral("Text 40"));
+        pickText(vw<QComboBox>("videoPage"), QStringLiteral("Page 1"));
+        QCheckBox *mixed = vw<QCheckBox>("videoMixed");
+        if (mixed->isChecked()) mixed->setChecked(false);
+        pickText(zoomPick ? zoomPick : vw<QComboBox>("videoZoom"), QStringLiteral("2×"));
+    }
+    static bool hasColour(const QImage &img, int x0, int x1, int y, int r, int g, int b)
+    {
+        for (int x = x0; x <= x1; ++x) {
+            const QColor c = img.pixelColor(x, y);
+            if (qAbs(c.red() - r) < 24 && qAbs(c.green() - g) < 24 && qAbs(c.blue() - b) < 24) return true;
         }
-        pick->setCurrentIndex(0);
-        shot(QStringLiteral("video"));
+        return false;
     }
 
-    /* Video inspector: hover reads a byte, a click pins it, a double-click
-     * breaks on writes to it. Text page 1, cell (3,2) = $0503. */
+private slots:
+    /* Views, Follow screen, mode / page / Mixed, zoom, overlays. */
+    void videoTab()
+    {
+        apple2debug_breakpoint_clear(m_d);
+        showVideo();
+        auto *view = vw<QComboBox>("videoView");
+        auto *zoom = vw<QComboBox>("videoZoom");
+        auto *mode = vw<QComboBox>("videoMode");
+        auto *page = vw<QComboBox>("videoPage");
+        auto *follow = vw<QCheckBox>("videoFollow");
+        auto *mixed = vw<QCheckBox>("videoMixed");
+        QWidget *pic = vw<QWidget>("videoPicture");
+        QVERIFY(view && zoom && mode && page && follow && mixed && pic);
+        QStringList views, modes, zooms;
+        for (int i = 0; i < view->count(); ++i) views << view->itemText(i);
+        for (int i = 0; i < mode->count(); ++i) modes << mode->itemText(i);
+        for (int i = 0; i < zoom->count(); ++i) zooms << zoom->itemText(i);
+        QCOMPARE(views, (QStringList{ QStringLiteral("Screen"), QStringLiteral("Decoded") }));
+        QCOMPARE(modes, (QStringList{ QStringLiteral("Text 40"), QStringLiteral("Text 80"), QStringLiteral("Lo-res"),
+                                      QStringLiteral("Double lo-res"), QStringLiteral("Hi-res"),
+                                      QStringLiteral("Double hi-res") }));
+        QCOMPARE(zooms, (QStringList{ QStringLiteral("Fit"), QStringLiteral("1×"), QStringLiteral("2×"),
+                                      QStringLiteral("3×"), QStringLiteral("4×") }));
+        QCOMPARE(page->count(), 2);
+        shot(QStringLiteral("video-screen"));
+
+        /* Decoded is 560x192 before zoom */
+        pickText(view, QStringLiteral("Decoded"));
+        QVERIFY(follow->isChecked());           /* Follow screen is on by default */
+        pickText(zoom, QStringLiteral("1×"));
+        QTRY_COMPARE_WITH_TIMEOUT(pic->size(), QSize(APPLE2VID_W, APPLE2VID_H), 1000);
+        pickText(zoom, QStringLiteral("2×"));
+        QTRY_COMPARE_WITH_TIMEOUT(pic->size(), QSize(APPLE2VID_W * 2, APPLE2VID_H * 2), 1000);
+        pickText(zoom, QStringLiteral("4×"));
+        QTRY_COMPARE_WITH_TIMEOUT(pic->size(), QSize(APPLE2VID_W * 4, APPLE2VID_H * 4), 1000);
+        pickText(zoom, QStringLiteral("Fit"));
+        QTRY_VERIFY_WITH_TIMEOUT(pic->width() >= 100 && pic->height() >= 100, 1000);
+        pickText(zoom, QStringLiteral("1×"));
+        QTRY_COMPARE_WITH_TIMEOUT(pic->size(), QSize(APPLE2VID_W, APPLE2VID_H), 1000);
+        shot(QStringLiteral("video-decoded"));
+
+        /* the controls track the machine while Follow is on */
+        apple2vid_tab *ref = apple2vid_tab_new(m_s);
+        apple2vid_tab_refresh(ref, 1);
+        QCOMPARE(mode->currentIndex(), apple2vid_tab_mode(ref));
+        QCOMPARE(page->currentIndex() + 1, apple2vid_tab_page(ref));
+        QCOMPARE((int)mixed->isChecked(), apple2vid_tab_mixed(ref) ? 1 : 0);
+        apple2vid_tab_free(ref);
+
+        /* choosing a mode, a page or Mixed turns Follow off */
+        pickText(mode, QStringLiteral("Hi-res"));
+        QVERIFY(!follow->isChecked());
+        QCOMPARE(mode->currentText(), QStringLiteral("Hi-res"));
+        follow->setChecked(true);
+        pickText(page, QStringLiteral("Page 2"));
+        QVERIFY(!follow->isChecked());
+        QCOMPARE(page->currentText(), QStringLiteral("Page 2"));
+        follow->setChecked(true);
+        mixed->setChecked(!mixed->isChecked());
+        QVERIFY(!follow->isChecked());
+        const bool wasMixed = !mixed->isChecked();
+        /* a Mixed hi-res picture differs from the plain one in its text lines */
+        pickText(mode, QStringLiteral("Hi-res"));
+        mixed->setChecked(false);
+        const QImage plain = pic->grab().toImage();
+        mixed->setChecked(true);
+        const QImage withText = pic->grab().toImage();
+        QVERIFY(plain != withText);
+        mixed->setChecked(wasMixed);
+        /* Follow screen again returns to the machine's mode */
+        follow->setChecked(true);
+        ref = apple2vid_tab_new(m_s);
+        apple2vid_tab_refresh(ref, 1);
+        QTRY_COMPARE_WITH_TIMEOUT(mode->currentIndex(), apple2vid_tab_mode(ref), 1000);
+        apple2vid_tab_free(ref);
+
+        /* an overlay checkbox redraws the picture */
+        pickText(mode, QStringLiteral("Text 40"));
+        pickText(page, QStringLiteral("Page 1"));
+        mixed->setChecked(false);
+        auto *grid = vw<QCheckBox>("videoOverlay_grid");
+        QVERIFY(grid && !grid->isChecked());
+        const QImage before = pic->grab().toImage();
+        grid->setChecked(true);
+        const QImage after = pic->grab().toImage();
+        QVERIFY(before != after);
+        shot(QStringLiteral("video-grid"));
+        grid->setChecked(false);
+        QCOMPARE(pic->grab().toImage(), before);
+        /* one checkbox per overlay in the table */
+        int n = 0;
+        const apple2vid_overlay_info *od = apple2vid_overlays(&n);
+        for (int i = 0; i < n; ++i)
+            QVERIFY(vw<QCheckBox>(qPrintable(QStringLiteral("videoOverlay_%1").arg(QString::fromUtf8(od[i].name)))));
+
+        pickText(view, QStringLiteral("Screen"));
+        QCOMPARE(mode->isEnabled(), false);             /* the Decoded controls only apply to Decoded */
+        pickText(view, QStringLiteral("Decoded"));
+        QCOMPARE(mode->isEnabled(), true);
+        pickText(zoom, QStringLiteral("1×"));
+        m_tabs->setCurrentIndex(0);
+    }
+
+    /* Hover reads a byte, a click pins it, the same spot unpins, a double-click breaks on writes to it,
+     * and Show in Memory opens the Memory tab on it. Text page 1 cell (3,2) = $0503. */
     void videoInspector()
     {
-        m_tabs->setCurrentIndex(8);
-        QTRY_VERIFY_WITH_TIMEOUT(m_tabs->currentWidget()->isVisible(), 1000);
-        auto *pick = m_tabs->currentWidget()->findChild<QComboBox *>();
-        QVERIFY(pick);
-        pick->setCurrentIndex((int)APPLE2VIEW_TEXT_1);
+        apple2debug_breakpoint_clear(m_d);
         apple2debug_write(m_d, 0x0503, 0xC1);
-        QLabel *pic = nullptr;
-        QLabel *hoverTxt = nullptr, *pinTxt = nullptr, *msg = nullptr;
-        for (QLabel *l : m_tabs->currentWidget()->findChildren<QLabel *>()) {
-            if (l->minimumWidth() >= APPLE2VIEW_WIDTH) pic = l;
-            else if (l->text().startsWith(QLatin1String("Hover"))) hoverTxt = l;
-            else if (l->textInteractionFlags() & Qt::TextSelectableByMouse) pinTxt = l;
-            else if (l->styleSheet().contains(QLatin1String("gray")) && l->text().isEmpty()) msg = l;
-        }
-        QVERIFY(pic && hoverTxt && pinTxt && msg);
-        QPushButton *unpin = nullptr;
-        for (QPushButton *b : m_tabs->currentWidget()->findChildren<QPushButton *>())
-            if (b->text() == QLatin1String("Unpin")) unpin = b;
-        QVERIFY(unpin);
-        QTRY_VERIFY_WITH_TIMEOUT(!pic->pixmap(Qt::ReturnByValue).isNull(), 2000);
-        const QPoint at(3 * 7 * 2 + 6, 2 * 8 * 2 + 6);      /* inside the cell, at 2x */
+        decodedText40();
+        QWidget *pic = vw<QWidget>("videoPicture");
+        auto *pixel = vw<QLabel>("videoPixel");
+        auto *note = vw<QLabel>("videoNote");
+        QVERIFY(pic && pixel && note);
+        auto *sections = vw<QTabWidget>("videoSections");
+        QCOMPARE(sections->tabText(0), QStringLiteral("Pixel"));
+        sections->setCurrentIndex(0);
+        QVERIFY(pixel->text().contains(QLatin1String("Move over")));
+        const QPoint at(3 * 14 * 2 + 12, 2 * 8 * 2 + 6);        /* inside the cell, at 2x */
+        const QPoint away(30 * 14 * 2 + 12, 10 * 8 * 2 + 6);
         QTest::mouseMove(pic, at);
-        QTRY_VERIFY_WITH_TIMEOUT(hoverTxt->text().contains(QLatin1String("0503")), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(pixel->text().contains(QLatin1String("0503")), 2000);
         QTest::mouseClick(pic, Qt::LeftButton, {}, at);
-        QTRY_VERIFY_WITH_TIMEOUT(pinTxt->text().contains(QLatin1String("0503")), 2000);
-        QTest::mouseClick(pic, Qt::LeftButton, {}, at);     /* the same cell again unpins */
-        QTRY_VERIFY_WITH_TIMEOUT(pinTxt->text().isEmpty(), 2000);
+        QTest::mouseMove(pic, away);                    /* the pin stays when the pointer leaves */
+        QVERIFY(pixel->text().contains(QLatin1String("0503")));
+        /* marks: the pin is yellow around the cell (2x: x = 84, y = 32 .. 48) */
+        QImage img = pic->grab().toImage();
+        QVERIFY(hasColour(img, 82, 86, 40, 255, 217, 26));
+        shot(QStringLiteral("video-pixel"));
+        /* the hover mark follows the pointer: white around the new cell (x = 840) */
+        QTRY_VERIFY_WITH_TIMEOUT(hasColour(pic->grab().toImage(), 838, 842, 100, 255, 255, 255), 1000);
+        QTest::mouseClick(pic, Qt::LeftButton, {}, at);     /* the same spot unpins */
+        QTest::mouseMove(pic, away);
+        QTRY_VERIFY_WITH_TIMEOUT(!pixel->text().contains(QLatin1String("0503")), 1000);
+        QVERIFY(!hasColour(pic->grab().toImage(), 82, 86, 40, 255, 217, 26));
         QTest::mouseClick(pic, Qt::LeftButton, {}, at);
-        QTRY_VERIFY_WITH_TIMEOUT(pinTxt->text().contains(QLatin1String("0503")), 2000);
-        /* a double-click adds a write breakpoint at that address, once */
+        QTRY_VERIFY_WITH_TIMEOUT(pixel->text().contains(QLatin1String("0503")), 1000);
+
+        /* a double-click adds a write breakpoint on the byte (Text 40 uses no aux), once */
         apple2debug_breakpoint_clear(m_d);
         QTest::mouseDClick(pic, Qt::LeftButton, {}, at);
-        QTRY_VERIFY_WITH_TIMEOUT(msg->text().contains(QLatin1String("0503")), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(note->text().contains(QLatin1String("0503")), 1000);
         apple2debug_breakpoint bps[16];
         int n = apple2debug_breakpoint_list(m_d, bps, 16);
         int writes = 0;
         for (int i = 0; i < n; i++)
-            if (bps[i].type == APPLE2DEBUG_BP_WRITE && bps[i].start == 0x0503 && bps[i].end == 0x0503) writes++;
+            if ((bps[i].type & APPLE2DEBUG_BP_WRITE) && bps[i].start == 0x0503 && bps[i].end == 0x0503) writes++;
+        QCOMPARE(n, 1);
         QCOMPARE(writes, 1);
         QTest::mouseDClick(pic, Qt::LeftButton, {}, at);
-        n = apple2debug_breakpoint_list(m_d, bps, 16);
-        writes = 0;
-        for (int i = 0; i < n; i++)
-            if (bps[i].type == APPLE2DEBUG_BP_WRITE && bps[i].start == 0x0503) writes++;
-        QCOMPARE(writes, 1);
+        QCOMPARE(apple2debug_breakpoint_list(m_d, bps, 16), 1);
+        /* the button does the same on the pinned pixel */
         apple2debug_breakpoint_clear(m_d);
+        QPushButton *brk = nullptr, *mem = nullptr, *unpin = nullptr;
+        for (QPushButton *b : videoPage()->findChildren<QPushButton *>()) {
+            if (b->text() == QLatin1String("Break on writes")) brk = b;
+            if (b->text() == QLatin1String("Show in Memory")) mem = b;
+            if (b->text() == QLatin1String("Unpin")) unpin = b;
+        }
+        QVERIFY(brk && mem && unpin);
+        QTest::mouseClick(brk, Qt::LeftButton);
+        QCOMPARE(apple2debug_breakpoint_list(m_d, bps, 16), 1);
+
+        /* Text 80 uses aux too: two write breakpoints (main and aux) */
+        apple2debug_breakpoint_clear(m_d);
+        pickText(vw<QComboBox>("videoMode"), QStringLiteral("Text 80"));
+        QTest::mouseDClick(pic, Qt::LeftButton, {}, QPoint(3 * 14 * 2 + 4, 2 * 8 * 2 + 6));
+        n = apple2debug_breakpoint_list(m_d, bps, 16);
+        QCOMPARE(n, apple2debug_bank_valid(m_d, APPLE2_BANK_AUX) ? 2 : 1);
+        for (int i = 0; i < n; i++) QVERIFY(bps[i].type & APPLE2DEBUG_BP_WRITE);
+        apple2debug_breakpoint_clear(m_d);
+        pickText(vw<QComboBox>("videoMode"), QStringLiteral("Text 40"));
+
+        /* Show in Memory: the Memory tab, on the byte, in main RAM */
         QTest::mouseClick(unpin, Qt::LeftButton);
-        QVERIFY(pinTxt->text().isEmpty());
-        /* a page change drops a pin */
-        QTest::mouseClick(pic, Qt::LeftButton, {}, at);
-        QTRY_VERIFY_WITH_TIMEOUT(!pinTxt->text().isEmpty(), 2000);
-        pick->setCurrentIndex((int)APPLE2VIEW_TEXT_2);
-        QTRY_VERIFY_WITH_TIMEOUT(pinTxt->text().isEmpty(), 2000);
-        pick->setCurrentIndex(0);
+        QTest::mouseMove(pic, away);
+        QTest::mouseClick(pic, Qt::LeftButton, {}, at);                 /* pin $0503 again */
+        QTRY_VERIFY_WITH_TIMEOUT(pixel->text().contains(QLatin1String("0503")), 1000);
+        QTest::mouseClick(mem, Qt::LeftButton);
+        QCOMPARE(m_tabs->currentIndex(), 2);
+        auto *bank = m_tabs->widget(2)->findChild<QComboBox *>(QStringLiteral("memBank"));
+        QVERIFY(bank);
+        QCOMPARE(bank->currentIndex(), (int)APPLE2_BANK_MAIN);
+        QVERIFY(memView()->toPlainText().contains(QStringLiteral("$0500: ")));
+        QVERIFY(!memView()->extraSelections().isEmpty());
+        bank->setCurrentIndex(APPLE2_BANK_CURRENT);
+
+        showVideo();
+        QTest::mouseClick(unpin, Qt::LeftButton);
+        QTest::mouseMove(pic, away - QPoint(28, 0));
+        QTest::mouseMove(pic, away);
+        QTRY_VERIFY_WITH_TIMEOUT(!pixel->text().contains(QLatin1String("0503")), 1000);
+        apple2debug_breakpoint_clear(m_d);
+        pickText(vw<QComboBox>("videoZoom"), QStringLiteral("1×"));
+        m_tabs->setCurrentIndex(0);
+    }
+
+    /* The Switches table: the eight switches, their addresses, Break on change. */
+    void videoSwitches()
+    {
+        apple2debug_breakpoint_clear(m_d);
+        decodedText40();
+        auto *sections = vw<QTabWidget>("videoSections");
+        QCOMPARE(sections->tabText(1), QStringLiteral("Switches"));
+        sections->setCurrentIndex(1);
+        auto *table = vw<QTableWidget>("videoSwitches");
+        QVERIFY(table);
+        QCOMPARE(table->rowCount(), (int)APPLE2VID_SW_COUNT);
+        QTRY_VERIFY_WITH_TIMEOUT(table->item(0, 0) && !table->item(0, 0)->text().isEmpty(), 2000);
+        apple2vid_tab *ref = apple2vid_tab_new(m_s);
+        apple2vid_tab_refresh(ref, 1);
+        const apple2vid_switch *sw = nullptr;
+        QCOMPARE(apple2vid_tab_switches(ref, &sw), (int)APPLE2VID_SW_COUNT);
+        QStringList heads;
+        for (int c = 0; c < 6; ++c) heads << table->horizontalHeaderItem(c)->text();
+        QCOMPARE(heads, (QStringList{ QStringLiteral("Switch"), QStringLiteral("State"), QStringLiteral("Age"),
+                                      QStringLiteral("Set"), QStringLiteral("Clear"), QStringLiteral("Meaning") }));
+        for (int i = 0; i < APPLE2VID_SW_COUNT; ++i) {
+            QCOMPARE(table->item(i, 0)->text(), QString::fromUtf8(sw[i].name));
+            QCOMPARE(table->item(i, 1)->text(), sw[i].on ? QStringLiteral("on") : QStringLiteral("off"));
+            bool ok = false;
+            table->item(i, 2)->text().toInt(&ok);
+            QVERIFY(ok);                                    /* the age */
+            QCOMPARE(table->item(i, 3)->text(), QStringLiteral("$%1").arg(sw[i].set_addr, 4, 16, QLatin1Char('0')).toUpper());
+            QCOMPARE(table->item(i, 4)->text(), QStringLiteral("$%1").arg(sw[i].clr_addr, 4, 16, QLatin1Char('0')).toUpper());
+            QVERIFY(!table->item(i, 5)->text().isEmpty());
+        }
+        shot(QStringLiteral("video-switches"));
+        /* Break on change: read+write breakpoints on both addresses */
+        auto *b = qobject_cast<QPushButton *>(table->cellWidget(2, 6));
+        QVERIFY(b);
+        QCOMPARE(b->text(), QStringLiteral("Break on change"));
+        QTest::mouseClick(b, Qt::LeftButton);
+        apple2debug_breakpoint bps[16];
+        const int n = apple2debug_breakpoint_list(m_d, bps, 16);
+        QCOMPARE(n, 2);
+        QSet<int> addrs;
+        for (int i = 0; i < n; i++) {
+            QVERIFY((bps[i].type & APPLE2DEBUG_BP_READ) && (bps[i].type & APPLE2DEBUG_BP_WRITE));
+            QCOMPARE(bps[i].start, bps[i].end);
+            addrs << bps[i].start;
+        }
+        QCOMPARE(addrs, (QSet<int>{ (int)sw[2].set_addr, (int)sw[2].clr_addr }));
+        apple2vid_tab_free(ref);
+        apple2debug_breakpoint_clear(m_d);
+        sections->setCurrentIndex(0);
+        m_tabs->setCurrentIndex(0);
+    }
+
+    /* The Colours and Timing sections. */
+    void videoColoursAndTiming()
+    {
+        decodedText40();
+        QWidget *pic = vw<QWidget>("videoPicture");
+        auto *sections = vw<QTabWidget>("videoSections");
+        QCOMPARE(sections->tabText(2), QStringLiteral("Colours"));
+        QCOMPARE(sections->tabText(3), QStringLiteral("Timing"));
+        /* pin a pixel so one entry is the inspected one */
+        QTest::mouseClick(pic, Qt::LeftButton, {}, QPoint(3 * 14 * 2 + 12, 2 * 8 * 2 + 6));
+        sections->setCurrentIndex(2);
+        auto *colours = vw<QTableWidget>("videoColours");
+        QVERIFY(colours);
+        QTRY_VERIFY_WITH_TIMEOUT(colours->rowCount() >= 2, 2000);          /* text: black and white at least */
+        long total = 0;
+        bool inspected = false;
+        for (int r = 0; r < colours->rowCount(); ++r) {
+            QVERIFY(colours->item(r, 2)->text().startsWith(QLatin1Char('#')));
+            total += colours->item(r, 3)->text().section(QLatin1Char(' '), 0, 0).toLong();
+            inspected |= !colours->item(r, 4)->text().isEmpty();
+        }
+        QCOMPARE(total, (long)APPLE2VID_W * APPLE2VID_H);
+        QVERIFY(inspected);
+        shot(QStringLiteral("video-colours"));
+        sections->setCurrentIndex(3);
+        auto *timing = vw<QLabel>("videoTiming");
+        QVERIFY(timing);
+        QTRY_VERIFY_WITH_TIMEOUT(!timing->text().isEmpty() && timing->text() != QLatin1String("No timing yet"), 2000);
+        shot(QStringLiteral("video-timing"));
+        sections->setCurrentIndex(0);
+        QTest::mouseClick(pic, Qt::LeftButton, {}, QPoint(3 * 14 * 2 + 12, 2 * 8 * 2 + 6));     /* unpin */
+        pickText(vw<QComboBox>("videoZoom"), QStringLiteral("1×"));
+        m_tabs->setCurrentIndex(0);
+    }
+
+    /* The Memory tab's bank chooser: main and aux differ at one address; Go To takes a prefix. */
+    void memoryBank()
+    {
+        if (!apple2debug_bank_valid(m_d, APPLE2_BANK_AUX)) QSKIP("this machine has no aux RAM");
+        apple2debug_write_bank(m_d, APPLE2_BANK_MAIN, 0x0910, 0xD7);
+        apple2debug_write_bank(m_d, APPLE2_BANK_AUX, 0x0910, 0x3C);
+        m_tabs->setCurrentIndex(2);
+        QTRY_VERIFY_WITH_TIMEOUT(m_tabs->currentWidget()->isVisible(), 1000);
+        auto *bank = m_tabs->widget(2)->findChild<QComboBox *>(QStringLiteral("memBank"));
+        QVERIFY(bank);
+        QCOMPARE(bank->count(), (int)APPLE2_BANK_COUNT);
+        for (int b = 0; b < bank->count(); ++b) QCOMPARE(bank->itemText(b), QString::fromUtf8(apple2debug_bank_name(b)));
+        QCOMPARE(bank->currentIndex(), (int)APPLE2_BANK_CURRENT);
+        QCOMPARE(bank->itemText(0), QStringLiteral("As the CPU sees it"));
+        QLineEdit *go = entryIs(QStringLiteral("$C000, label or lo-hi"));
+        QVERIFY(go);
+        typeInto(go, QStringLiteral("0910"));
+        QVERIFY(memView()->toPlainText().contains(QStringLiteral("$0910: ")));
+        bank->setCurrentIndex(APPLE2_BANK_MAIN);
+        QVERIFY(memView()->toPlainText().contains(QStringLiteral("$0910: D7 ")));
+        bank->setCurrentIndex(APPLE2_BANK_AUX);
+        QVERIFY(memView()->toPlainText().contains(QStringLiteral("$0910: 3C ")));
+        QVERIFY(!memView()->toPlainText().contains(QStringLiteral("$0910: D7 ")));
+        /* the header names the bank */
+        bool named = false;
+        for (QLabel *l : m_tabs->widget(2)->findChildren<QLabel *>())
+            named |= l->text().contains(QString::fromUtf8(apple2debug_bank_name(APPLE2_BANK_AUX)));
+        QVERIFY(named);
+        shot(QStringLiteral("memory-aux"));
+
+        /* Write goes to the chosen bank */
+        QLineEdit *addr = entryIs(QStringLiteral("$C000")), *val = entryIs(QStringLiteral("$00"));
+        QVERIFY(addr && val);
+        addr->setText(QStringLiteral("0911"));
+        typeInto(val, QStringLiteral("$99"));
+        uint8_t b = 0;
+        apple2debug_read_bank(m_d, APPLE2_BANK_AUX, 0x0911, &b, 1);
+        QCOMPARE((int)b, 0x99);
+        apple2debug_read_bank(m_d, APPLE2_BANK_MAIN, 0x0911, &b, 1);
+        QVERIFY(b != 0x99);
+
+        /* Find Next searches the chosen bank */
+        const uint8_t pat[4] = { 0xA7, 0x5E, 0x11, 0x2B };
+        for (int i = 0; i < 4; ++i) apple2debug_write_bank(m_d, APPLE2_BANK_AUX, (uint16_t)(0x0A40 + i), pat[i]);
+        QLineEdit *find = entry(QStringLiteral("bytes or text"));
+        QVERIFY(find);
+        typeInto(go, QStringLiteral("0900"));
+        find->setText(QStringLiteral("A7 5E 11 2B"));
+        QTest::mouseClick(button(QStringLiteral("Find Next")), Qt::LeftButton);
+        QVERIFY(memView()->toPlainText().contains(QStringLiteral("$0A40: A7 5E 11 2B")));
+        bank->setCurrentIndex(APPLE2_BANK_MAIN);                            /* not there in main */
+        typeInto(go, QStringLiteral("0900"));
+        QTest::mouseClick(button(QStringLiteral("Find Next")), Qt::LeftButton);
+        QCOMPARE(m_win->statusBar()->currentMessage(), QStringLiteral("Not found"));
+
+        /* Go To with a prefix switches the chooser; a bare address keeps it */
+        bank->setCurrentIndex(APPLE2_BANK_CURRENT);
+        typeInto(go, QStringLiteral("aux:$0910"));
+        QCOMPARE(bank->currentIndex(), (int)APPLE2_BANK_AUX);
+        QVERIFY(memView()->toPlainText().contains(QStringLiteral("$0910: 3C ")));
+        typeInto(go, QStringLiteral("main:0910"));
+        QCOMPARE(bank->currentIndex(), (int)APPLE2_BANK_MAIN);
+        QVERIFY(memView()->toPlainText().contains(QStringLiteral("$0910: D7 ")));
+        typeInto(go, QStringLiteral("0910"));
+        QCOMPARE(bank->currentIndex(), (int)APPLE2_BANK_MAIN);
+
+        /* a watch's Memory action uses the watch's own prefix */
+        apple2watch_clear();
+        apple2watch_add("aux:$0910");
+        m_tabs->setCurrentIndex(4);
+        QTRY_VERIFY_WITH_TIMEOUT(m_tabs->currentWidget()->isVisible(), 1000);
+        QPushButton *wmem = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            [&] {
+                for (QPushButton *p : m_tabs->currentWidget()->findChildren<QPushButton *>())
+                    if (p->text() == QLatin1String("Memory")) wmem = p;
+                return wmem != nullptr;
+            }(), 2000);
+        QTest::mouseClick(wmem, Qt::LeftButton);
+        QCOMPARE(m_tabs->currentIndex(), 2);
+        QCOMPARE(bank->currentIndex(), (int)APPLE2_BANK_AUX);
+        apple2watch_clear();
+
+        bank->setCurrentIndex(APPLE2_BANK_CURRENT);
+        apple2debug_write_bank(m_d, APPLE2_BANK_AUX, 0x0910, 0);
+        m_tabs->setCurrentIndex(0);
     }
 
     /* FujiNet: empty without the runtime, and says so. */

@@ -27,17 +27,22 @@
  * APPLE2_DEBUGGER_TAB picks the tab shown first: an index (0 Console,
  * 1 Disassembly, 2 Memory, 3 Breakpoints, 4 Watches, 5 Slots & I/O, 6 Trace,
  * 7 History, 8 Video, 9 FujiNet) or the start of a tab's name ("io" is the
- * Slots & I/O tab). APPLE2_DEBUGGER_VIEW picks the Video tab's page (an index
- * into apple2debug_view_name). For captures: APPLE2_WATCH, APPLE2_WATCH_BREAK,
- * APPLE2_MEM_GOTO, APPLE2_HISTORY=1 and APPLE2_POPOUT=<tab>.
+ * Slots & I/O tab). APPLE2_DEBUGGER_VIEW picks the Video tab's decoded page
+ * (0..5: text 1, text 2, lo-res 1, lo-res 2, hi-res 1, hi-res 2), and
+ * APPLE2_VIDEO_PIN="x,y" pins a point of the (zoomed) picture; the controller
+ * reads APPLE2_DEBUGGER_VIDEO_* itself. For captures: APPLE2_WATCH,
+ * APPLE2_WATCH_BREAK, APPLE2_MEM_GOTO (a bank prefix is fine: aux:$0400),
+ * APPLE2_HISTORY=1 and APPLE2_POPOUT=<tab>.
  *
  * Highlights: the PC's line is the accent colour with white text, an enabled
  * breakpoint's marker red and a disabled one's grey, the selected line (Run to
  * Cursor) the system selection colour underlined, labels and comments grey;
  * the Run button is the accent colour while stopped.
  *
- * The Video tab is the video page viewer (apple2debug_render_view): a popup of
- * the pages, shown 2x with nearest-neighbour scaling. The FujiNet tab shows
+ * The Video tab (VideoTab.m, over apple2vidtab.h) shows the screen or the
+ * decoded video memory with overlays, hover/pin inspection, the soft switches,
+ * the colours and the timing. The Memory tab has a bank chooser (main, aux, the
+ * language card banks, ROM: apple2debug_read_bank). The FujiNet tab shows
  * every SmartPort packet between the card and FujiNet, both ways, with hex,
  * beside the card's state (apple2debug_fujinet_*).
  *
@@ -50,6 +55,7 @@
 
 #import "DebuggerWindow.h"
 #import "../help/HelpWindow.h"
+#import "VideoTab.h"
 
 #import <QuartzCore/QuartzCore.h>
 
@@ -87,7 +93,6 @@
 #define LIVE_TICKS 5           /* 5 x 100 ms: the live refresh while running */
 #define MAX_SLOTS 16
 #define MAX_REGIONS 128
-#define VIDEO_ZOOM 2           /* the video page is shown at 2x */
 
 static DebuggerWindow *g_debugger;
 
@@ -163,98 +168,6 @@ static NSColor *breakpointRed(void)
 }
 @end
 
-/* XRGB8888 pixels (0x00RRGGBB words, rows `stride` words apart) as an image
- * of w x h. The pixels are copied, so the caller's scratch can be reused for
- * the next picture. On a little-endian host the bytes run B,G,R,X, which
- * kCGBitmapByteOrder32Little + AlphaNoneSkipFirst reads exactly (the same as
- * the main display). */
-static NSImage *imageFromXRGB(const uint32_t *px, int w, int h, int stride)
-{
-    NSData *data = [NSData dataWithBytes:px length:(NSUInteger)stride * (NSUInteger)h * 4];
-    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
-    CGImageRef cg = CGImageCreate((size_t)w, (size_t)h, 8, 32, (size_t)stride * 4, space,
-                                  kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little, provider, NULL, false,
-                                  kCGRenderingIntentDefault);
-    CGDataProviderRelease(provider);
-    CGColorSpaceRelease(space);
-    if (!cg) return nil;
-    NSImage *img = [[NSImage alloc] initWithCGImage:cg size:NSMakeSize(w, h)];
-    CGImageRelease(cg);
-    return img;
-}
-
-/* The Video tab's picture: reports the mouse in picture coordinates (hover,
- * leave, click with its click count). Not flipped; y is turned over here. */
-@interface VideoPicView : NSImageView
-@property (nonatomic, copy) void (^onHover)(int x, int y);        /* x < 0: left */
-@property (nonatomic, copy) void (^onClick)(int x, int y, NSInteger clicks);
-@end
-
-@implementation VideoPicView {
-    NSTrackingArea *_area;
-}
-
-- (void)updateTrackingAreas
-{
-    [super updateTrackingAreas];
-    if (_area) [self removeTrackingArea:_area];
-    _area = [[NSTrackingArea alloc] initWithRect:self.bounds
-                                         options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited |
-                                                 NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
-                                           owner:self userInfo:nil];
-    [self addTrackingArea:_area];
-}
-
-/* The picture point under the event, or NO outside the view. */
-- (BOOL)pictureX:(int *)x y:(int *)y event:(NSEvent *)event
-{
-    const NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
-    const NSSize sz = self.bounds.size;
-    if (sz.width < 1 || sz.height < 1 || p.x < 0 || p.y < 0 || p.x >= sz.width || p.y >= sz.height) return NO;
-    *x = (int)(p.x * APPLE2VIEW_WIDTH / sz.width);
-    *y = (int)((sz.height - 1 - p.y) * APPLE2VIEW_HEIGHT / sz.height);   /* AppKit's y is up */
-    if (*x >= APPLE2VIEW_WIDTH) *x = APPLE2VIEW_WIDTH - 1;
-    if (*y >= APPLE2VIEW_HEIGHT) *y = APPLE2VIEW_HEIGHT - 1;
-    return *x >= 0 && *y >= 0;
-}
-
-- (void)mouseMoved:(NSEvent *)event
-{
-    int x, y;
-    if (!self.onHover) return;
-    if ([self pictureX:&x y:&y event:event]) self.onHover(x, y);
-    else self.onHover(-1, -1);
-}
-
-- (void)mouseExited:(NSEvent *)event
-{
-    (void)event;
-    if (self.onHover) self.onHover(-1, -1);
-}
-
-- (void)mouseDown:(NSEvent *)event
-{
-    int x, y;
-    if (self.onClick && [self pictureX:&x y:&y event:event]) self.onClick(x, y, event.clickCount);
-}
-@end
-
-/* A 1-pixel outline of a picture rectangle, clipped to the picture. */
-static void outlineRect(uint32_t *fb, int rx, int ry, int rw, int rh, uint32_t colour)
-{
-    for (int i = 0; i < rw; i++)
-        for (int e = 0; e < 2; e++) {
-            const int x = rx + i, y = e ? ry + rh - 1 : ry;
-            if (x >= 0 && x < APPLE2VIEW_WIDTH && y >= 0 && y < APPLE2VIEW_HEIGHT) fb[y * APPLE2VIEW_WIDTH + x] = colour;
-        }
-    for (int j = 0; j < rh; j++)
-        for (int e = 0; e < 2; e++) {
-            const int y = ry + j, x = e ? rx + rw - 1 : rx;
-            if (x >= 0 && x < APPLE2VIEW_WIDTH && y >= 0 && y < APPLE2VIEW_HEIGHT) fb[y * APPLE2VIEW_WIDTH + x] = colour;
-        }
-}
-
 @interface DebuggerWindow () <NSTabViewDelegate, NSTableViewDataSource>
 - (instancetype)initWithSession:(apple2session *)session;
 - (void)show;
@@ -284,7 +197,9 @@ static void outlineRect(uint32_t *fb, int rx, int ry, int rw, int rh, uint32_t c
     NSButton *_flag[NUM_FLAGS];
     NSTextField *_beam;
     NSTextView *_mem;
-    NSTextField *_memGoto, *_memWrite;
+    NSTextField *_memGoto, *_memWrite, *_memTitle;
+    NSPopUpButton *_memBankPick;
+    int _memBank;               /* an apple2debug_bank: what the dump, search, poke and Go To read */
     int _memBase;               /* the dump's first address */
     BOOL _memHl;                /* a range is highlighted: Go to, a hit, a watch */
     int _memHlLo, _memHlHi;
@@ -318,14 +233,8 @@ static void outlineRect(uint32_t *fb, int rx, int ry, int rw, int rh, uint32_t c
     int _lineCount;
     int _selected;              /* the selected line's address, or -1 */
 
-    NSPopUpButton *_viewPick;
-    NSTextField *_viewNote;
-    VideoPicView *_viewPic;
-    uint32_t *_viewFb;          /* APPLE2VIEW_WIDTH x APPLE2VIEW_HEIGHT, XRGB8888: the page as rendered */
-    uint32_t *_viewDraw;        /* the same with the hover and pin outlines drawn in */
-    NSTextField *_viewHover, *_viewPinned, *_viewStatus;
-    apple2debug_pixel _hov, _pin;   /* .valid 0: no hover / no pin */
-    int _hovX, _hovY, _pinX, _pinY; /* the picture points they were read at */
+    Apple2VideoTab *_videoTab;  /* the Video tab (VideoTab.m) */
+    BOOL _videoShown;           /* it was on show at the last refresh */
 
     NSPopUpButton *_bpType;
     NSTextField *_bpStart, *_bpEnd, *_bpCond, *_bpErr, *_bpStop;
@@ -666,8 +575,6 @@ static void fill(NSStackView *stack, NSView *view)
     _fujiCount = -1;
     _memBase = 0x0400;          /* text page 1 */
     _selected = -1;
-    _viewFb = calloc((size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT, sizeof(uint32_t));
-    _viewDraw = calloc((size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT, sizeof(uint32_t));
     _history = [NSMutableArray array];
     [self buildWindow];
 
@@ -682,29 +589,17 @@ static void fill(NSStackView *stack, NSView *view)
         if (watch && *watch) apple2watch_add(watch);
         if (watchBreak && *watchBreak && apple2sym_parse_range(_dbg, watchBreak, &lo, &hi))
             [self breakOnChangeLo:lo hi:hi];
-        if (gotoText && *gotoText && apple2sym_parse_range(_dbg, gotoText, &lo, &hi))
-            [self showMemLo:lo hi:hi];
+        int gotoBank = APPLE2_BANK_CURRENT;
+        if (gotoText && *gotoText && apple2sym_parse_range_bank(_dbg, gotoText, &gotoBank, &lo, &hi))
+            [self showMemBank:gotoBank lo:lo hi:hi];
         if (history && *history) apple2debug_trace_enable(_dbg, 1);
-        /* a video page to land on (an index into apple2debug_view_name) */
+        /* a decoded video page to land on (0..5: text 1, text 2, lo-res 1, lo-res 2, hi-res 1, hi-res 2) */
         const char *view = getenv("APPLE2_DEBUGGER_VIEW");
-        if (view && *view) {
-            const int idx = atoi(view);
-            if (idx >= 0 && idx < _viewPick.numberOfItems) [_viewPick selectItemAtIndex:idx];
-        }
-        /* a point of the picture to pin, "x,y" in picture coordinates */
+        if (view && *view) [_videoTab selectLegacyPage:atoi(view)];
+        /* a point of the picture to pin, "x,y" in zoomed picture pixels */
         const char *pin = getenv("APPLE2_VIDEO_PIN");
         int px, py;
-        if (pin && sscanf(pin, "%d , %d", &px, &py) == 2) {
-            [self refreshVideo];    /* the page must exist before it is inspected */
-            if (apple2debug_view_inspect(_dbg, (apple2debug_view)_viewPick.indexOfSelectedItem, px, py, &_pin) == 0 &&
-                _pin.valid) {
-                _pinX = px;
-                _pinY = py;
-                [self refreshVideo];
-            } else {
-                _pin.valid = 0;
-            }
-        }
+        if (pin && sscanf(pin, "%d , %d", &px, &py) == 2) [_videoTab pinAtX:px y:py];
         if (popOut && *popOut) {
             const int t = tabFromText(popOut);
             if (t >= 0 && t < NUM_TABS) [self popOutTab:t];
@@ -733,8 +628,6 @@ static void fill(NSStackView *stack, NSView *view)
 {
     [_tick invalidate];
     if (_keyMonitor) [NSEvent removeMonitor:_keyMonitor];
-    free(_viewFb);
-    free(_viewDraw);
 }
 
 - (void)windowWillClose:(NSNotification *)note
@@ -815,6 +708,8 @@ static void fill(NSStackView *stack, NSView *view)
         _traceTicks = 0;        /* the Trace tab follows the machine */
         [self refreshHist:0];
     }
+    /* the Video tab every tick while it shows (the controller says if anything changed) */
+    if ([self tabVisible:TAB_VIDEO]) [self refreshVideo];
 }
 
 /* Waits up to ~40 ms for a stop to land after the engine was asked to move:
@@ -916,8 +811,19 @@ static void fill(NSStackView *stack, NSView *view)
     NSButton *go = [self button:@"Go" action:@selector(gotoMem:)];
     NSButton *prev = [self button:@"◀" action:@selector(memPrev:)];
     NSButton *next = [self button:@"▶" action:@selector(memNext:)];
-    NSStackView *memHead = hstack(@[[self label:@"Memory (as the CPU sees it, no soft switches touched)"], [self label:@"Go to"], _memGoto, go,
-                                    prev, next]);
+    _memBankPick = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    _memBankPick.menu.autoenablesItems = NO;     /* an absent bank stays greyed */
+    for (int i = 0; i < APPLE2_BANK_COUNT; i++) {
+        [_memBankPick addItemWithTitle:cstr(apple2debug_bank_name(i))];
+        _memBankPick.lastItem.tag = i;
+    }
+    _memBankPick.target = self;
+    _memBankPick.action = @selector(memBankChanged:);
+    _memBankPick.toolTip = @"Which memory the dump, Go To, search and poke use. Go To also takes a prefix: aux:$0400, lc2:$D000, rom:$FA62";
+    [_memBankPick setRefusesFirstResponder:YES];
+    _memTitle = [self hint:@"Memory (as the CPU sees it, no soft switches touched)"];
+    NSStackView *memHead = hstack(@[[self label:@"Bank"], _memBankPick, [self label:@"Go to"], _memGoto, go,
+                                    prev, next, _memTitle]);
 
     _srchKind = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     [_srchKind addItemsWithTitles:@[@"Hex", @"Text"]];
@@ -984,62 +890,19 @@ static void fill(NSStackView *stack, NSView *view)
     return v;
 }
 
-/* The video page viewer: a popup of the pages the engine decodes, shown 2x.
- * This is a PAGE, not what the machine is displaying -- it is how you see the
- * buffer a program draws into before it flips to it. One page, which scrolls
- * when the window is smaller than it. */
+/* The Video tab: a controller (core apple2vidtab.h) behind its own views
+ * (VideoTab.m). Show in Memory lands in the Memory tab, in the pixel's bank. */
 - (NSView *)buildVideo
 {
-    _viewPick = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    for (int i = 0; apple2debug_view_name(i); i++)
-        [_viewPick addItemWithTitle:@(apple2debug_view_name(i))];
-    _viewPick.target = self;
-    _viewPick.action = @selector(viewPickChanged:);
-    [_viewPick setRefusesFirstResponder:YES];
-    _viewNote = [self hint:@""];
-    NSStackView *bar = hstack(@[[self label:@"Page"], _viewPick, _viewNote]);
-
-    _viewPic = [[VideoPicView alloc] init];
-    _viewPic.imageScaling = NSImageScaleAxesIndependently;
-    _viewPic.wantsLayer = YES;
-    _viewPic.layer.magnificationFilter = kCAFilterNearest;
-    [_viewPic.widthAnchor constraintEqualToConstant:APPLE2VIEW_WIDTH * VIDEO_ZOOM].active = YES;
-    [_viewPic.heightAnchor constraintEqualToConstant:APPLE2VIEW_HEIGHT * VIDEO_ZOOM].active = YES;
-    _viewPic.layer.backgroundColor = NSColor.blackColor.CGColor;
+    _videoTab = [[Apple2VideoTab alloc] initWithSession:_session];
     __weak DebuggerWindow *weakSelf = self;
-    _viewPic.onHover = ^(int x, int y) { [weakSelf videoHoverX:x y:y]; };
-    _viewPic.onClick = ^(int x, int y, NSInteger clicks) { [weakSelf videoClickX:x y:y clicks:clicks]; };
-
-    /* beside the picture: what is under the mouse, the pinned byte, buttons */
-    _viewHover = [self label:@"Hover the picture to inspect it"];
-    _viewHover.font = monoFont();
-    _viewHover.textColor = NSColor.secondaryLabelColor;
-    _viewPinned = [self label:@""];
-    _viewPinned.font = monoFont();
-    _viewStatus = [self hint:@"Click pins a byte, double-click breaks on writes to it"];
-    NSStackView *buttons = hstack(@[ [self button:@"Show in Memory" action:@selector(videoShowInMemory:)],
-                                     [self button:@"Unpin" action:@selector(videoUnpin:)] ]);
-    NSStackView *side = vstack(@[ _viewHover, _viewPinned, buttons, _viewStatus ]);
-    side.spacing = 10;
-    [side.widthAnchor constraintEqualToConstant:340].active = YES;
-    NSStackView *row = hstack(@[ _viewPic, side ]);
-    row.alignment = NSLayoutAttributeTop;
-    row.spacing = 12;
-
-    /* the page is the scroll view's document, pinned to its top left; its
-     * own size is what its views ask for */
-    NSStackView *page = vstack(@[ bar, row ]);
-    page.spacing = 12;
-    page.translatesAutoresizingMaskIntoConstraints = NO;
-    NSScrollView *outer = [[NSScrollView alloc] init];
-    outer.hasVerticalScroller = YES;
-    outer.hasHorizontalScroller = YES;
-    outer.drawsBackground = NO;
-    outer.documentView = page;
-    NSClipView *clip = outer.contentView;
-    [page.topAnchor constraintEqualToAnchor:clip.topAnchor].active = YES;
-    [page.leadingAnchor constraintEqualToAnchor:clip.leadingAnchor].active = YES;
-    return outer;
+    _videoTab.showInMemory = ^(int bank, int addr) {
+        DebuggerWindow *s = weakSelf;
+        if (!s) return;
+        [s showTab:TAB_MEMORY];
+        [s showMemBank:bank lo:addr hi:addr];
+    };
+    return _videoTab.view;
 }
 
 /* One breakpoint-table cell: a fixed-width monospace label, or (width 0) the
@@ -1527,16 +1390,53 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
     [self refreshMem];
 }
 
+/* The Memory tab's bank (the chooser follows). A bank that is absent on this
+ * machine is refused. */
+- (BOOL)selectMemBank:(int)bank
+{
+    if (bank < 0 || bank >= APPLE2_BANK_COUNT) bank = APPLE2_BANK_CURRENT;
+    if (!apple2debug_bank_valid(_dbg, bank)) {
+        [self message:[NSString stringWithFormat:@"%@ is not present on this machine", cstr(apple2debug_bank_name(bank))]
+              console:NO];
+        return NO;
+    }
+    if (bank != _memBank) {
+        uint16_t lo = 0, hi = 0xFFFF;
+        _memBank = bank;
+        _memHl = NO;        /* the highlight was an address of the other bank */
+        if (apple2debug_bank_range(_dbg, bank, &lo, &hi) && (_memBase + MEM_BYTES - 1 < (int)lo || _memBase > (int)hi))
+            _memBase = lo & ~0xF;
+    }
+    if ((int)_memBankPick.indexOfSelectedItem != bank) [_memBankPick selectItemAtIndex:bank];
+    return YES;
+}
+
+- (void)memBankChanged:(id)sender
+{
+    (void)sender;
+    const int bank = (int)_memBankPick.selectedItem.tag;
+    if (![self selectMemBank:bank]) [_memBankPick selectItemAtIndex:_memBank];
+    [self refreshMem];
+}
+
+/* Brings a range of a bank into the dump; APPLE2_BANK_CURRENT leaves the chosen bank alone. */
+- (void)showMemBank:(int)bank lo:(int)lo hi:(int)hi
+{
+    if (bank != APPLE2_BANK_CURRENT && ![self selectMemBank:bank]) return;
+    [self showMemLo:lo hi:hi];
+}
+
 - (void)gotoMem:(id)sender
 {
     (void)sender;
     uint16_t lo, hi;
-    if (!apple2sym_parse_range(_dbg, _memGoto.stringValue.UTF8String, &lo, &hi)) {
+    int bank = APPLE2_BANK_CURRENT;
+    if (!apple2sym_parse_range_bank(_dbg, _memGoto.stringValue.UTF8String, &bank, &lo, &hi)) {
         [self message:[NSString stringWithFormat:@"Go to %@: not an address, label or range", _memGoto.stringValue]
               console:NO];
         return;
     }
-    [self showMemLo:lo hi:hi];
+    [self showMemBank:bank lo:lo hi:hi];
 }
 
 - (void)memPrev:(id)sender { (void)sender; _memBase -= MEM_BYTES; [self refreshMem]; }
@@ -1562,7 +1462,8 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
             [self message:[NSString stringWithFormat:@"Not a byte: %@", tok[i]] console:NO];
             return;
         }
-        apple2debug_write(_dbg, (uint16_t)(a + (int)i - 1), (uint8_t)v);
+        if (_memBank == APPLE2_BANK_CURRENT) apple2debug_write(_dbg, (uint16_t)(a + (int)i - 1), (uint8_t)v);
+        else apple2debug_write_bank(_dbg, _memBank, (uint16_t)(a + (int)i - 1), (uint8_t)v);
     }
     _memWrite.stringValue = @"";
     if (a < _memBase || a >= _memBase + MEM_BYTES) [self showMemLo:a hi:a];
@@ -1698,12 +1599,13 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
 - (void)wtMemory:(NSButton *)sender
 {
     uint16_t lo, hi;
-    if (!apple2watch_range(_dbg, (int)sender.tag, &lo, &hi)) {
+    int bank = APPLE2_BANK_CURRENT;
+    if (!apple2watch_range_bank(_dbg, (int)sender.tag, &bank, &lo, &hi)) {
         [self message:@"That watch does not resolve" console:NO];
         return;
     }
     [self showTab:TAB_MEMORY];
-    [self showMemLo:lo hi:hi];
+    [self showMemBank:bank lo:lo hi:hi];
 }
 
 - (void)wtBreak:(NSButton *)sender
@@ -1722,6 +1624,56 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
     [self refreshWatches];
 }
 
+/* The last match of the pattern in lo..hi of a bank: 1 and *last, 0 for none, -1 while running. */
+static int lastHitInBank(apple2debug *d, int bank, const uint8_t *pat, int n, uint8_t mask, int flags,
+                         unsigned lo, unsigned hi, uint16_t *last)
+{
+    uint16_t hit[256];
+    int have = 0;
+    unsigned at = lo;
+    while (at <= hi) {
+        const int r = apple2debug_search_bank(d, bank, pat, n, mask, flags, (uint16_t)at, (uint16_t)hi, hit, 256);
+        if (r < 0) return -1;
+        if (r == 0 || r > 256) break;
+        have = 1;
+        *last = hit[r - 1];
+        if (r < 256 || hit[r - 1] >= hi) break;
+        at = (unsigned)hit[r - 1] + 1;
+    }
+    return have;
+}
+
+/* apple2debug_search_next over a bank: the next match after `from` (before it
+ * if backward), wrapping once. 1 and *found, 0 for none, -1 while running. */
+static int searchBankNext(apple2debug *d, int bank, const uint8_t *pat, int n, uint8_t mask, int flags,
+                          uint16_t from, BOOL backward, uint16_t *found)
+{
+    uint16_t hit[1];
+    for (int pass = 0; pass < 2; pass++) {
+        if (!backward) {
+            const unsigned lo = pass == 0 ? (unsigned)from + 1 : 0u, hi = pass == 0 ? 0xFFFFu : (unsigned)from;
+            if (lo > hi) continue;
+            const int r = apple2debug_search_bank(d, bank, pat, n, mask, flags, (uint16_t)lo, (uint16_t)hi, hit, 1);
+            if (r < 0) return -1;
+            if (r > 0) {
+                *found = hit[0];
+                return 1;
+            }
+        } else {
+            if (pass == 0 && from == 0) continue;
+            const unsigned lo = pass == 0 ? 0u : (unsigned)from, hi = pass == 0 ? (unsigned)from - 1u : 0xFFFFu;
+            uint16_t last = 0;
+            const int r = lastHitInBank(d, bank, pat, n, mask, flags, lo, hi, &last);
+            if (r < 0) return -1;
+            if (r > 0) {
+                *found = last;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 - (void)searchBackward:(BOOL)backward
 {
     uint8_t pat[APPLE2SEARCH_MAX], mask = 0xFF;
@@ -1737,13 +1689,21 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
     }
     const uint16_t from = _memHl ? (backward ? (uint16_t)_memHlLo : (uint16_t)(_memHlLo + 1)) : (uint16_t)_memBase;
     uint16_t found = 0;
-    const int r = apple2debug_search_next(_dbg, pat, n, mask, flags, from, backward ? 1 : 0, &found);
+    if (!apple2debug_bank_valid(_dbg, _memBank)) {
+        _srchNote.stringValue = @"That bank is not present.";
+        return;
+    }
+    const int r = _memBank == APPLE2_BANK_CURRENT
+        ? apple2debug_search_next(_dbg, pat, n, mask, flags, from, backward ? 1 : 0, &found)
+        : searchBankNext(_dbg, _memBank, pat, n, mask, flags, from, backward, &found);
     if (r < 0) {
         _srchNote.stringValue = @"Stop the machine first.";
     } else if (r == 0) {
         _srchNote.stringValue = @"Not found.";
     } else {
-        _srchNote.stringValue = [NSString stringWithFormat:@"Found at $%04X", found];
+        _srchNote.stringValue = _memBank == APPLE2_BANK_CURRENT
+            ? [NSString stringWithFormat:@"Found at $%04X", found]
+            : [NSString stringWithFormat:@"Found at $%04X in %@", found, cstr(apple2debug_bank_name(_memBank))];
         [self showMemLo:found hi:found + n - 1];
     }
 }
@@ -1797,6 +1757,7 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
     NSTabViewItem *item = _items[tab];
     NSView *view = item.view;
     [_tabs removeTabViewItem:item];
+    if (tab == TAB_VIDEO) _videoShown = NO;     /* redrawn in its new place */
 
     NSWindow *win = [[NSWindow alloc]
         initWithContentRect:NSMakeRect(0, 0, 820, 580)
@@ -1844,6 +1805,7 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
     NSTabViewItem *item = _items[tab];
     NSView *view = item.view;
     int pos = 0;
+    if (tab == TAB_VIDEO) _videoShown = NO;
     _popped[tab] = nil;
     win.delegate = nil;
     [view removeFromSuperview];
@@ -1876,6 +1838,7 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
 - (void)refreshTab
 {
     [self refreshCpu];
+    if (![self tabVisible:TAB_VIDEO]) _videoShown = NO;     /* it redraws everything when it comes back */
     for (int t = 0; t < NUM_TABS; t++)
         if ([self tabVisible:t]) [self refreshTabAt:t];
 }
@@ -1942,7 +1905,20 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
     if (_memBase > 0x10000 - MEM_BYTES) _memBase = 0x10000 - MEM_BYTES;
     if (_memBase < 0) _memBase = 0;
     memset(data, 0, sizeof data);
-    apple2debug_read(_dbg, (uint16_t)_memBase, data, MEM_BYTES);
+    if (_memBank == APPLE2_BANK_CURRENT) {
+        apple2debug_read(_dbg, (uint16_t)_memBase, data, MEM_BYTES);
+        _memTitle.stringValue = @"Memory (as the CPU sees it, no soft switches touched)";
+    } else {
+        uint16_t lo = 0, hi = 0;
+        const int present = apple2debug_bank_range(_dbg, _memBank, &lo, &hi);
+        apple2debug_read_bank(_dbg, _memBank, (uint16_t)_memBase, data, MEM_BYTES);
+        _memTitle.stringValue = present
+            ? [NSString stringWithFormat:@"%@ ($%04X-$%04X; outside it reads $FF), no soft switches touched",
+                                         cstr(apple2debug_bank_name(_memBank)), lo, hi]
+            : [NSString stringWithFormat:@"%@ is not present on this machine", cstr(apple2debug_bank_name(_memBank))];
+    }
+    for (int i = 0; i < APPLE2_BANK_COUNT; i++)      /* an absent bank is greyed */
+        [_memBankPick itemAtIndex:i].enabled = apple2debug_bank_valid(_dbg, i) != 0;
     NSMutableString *text = [NSMutableString stringWithString:@"      0  1  2  3  4  5  6  7   8  9  A  B  C  D  E  F\n"];
     NSMutableArray<NSValue *> *marks = [NSMutableArray array];     /* the highlighted bytes' cells */
     for (int row = 0; row < MEM_ROWS; row++) {
@@ -2046,135 +2022,12 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
     [scroll reflectScrolledClipView:scroll.contentView];
 }
 
-/* Decodes whichever page the popup names into the picture. */
-- (void)viewPickChanged:(id)sender
-{
-    (void)sender;
-    _pin.valid = 0;     /* another page: the pinned point means something else */
-    _hov.valid = 0;
-    [self refreshVideo];
-}
-
+/* The Video tab: the controller says what changed. Forced when the tab has
+ * just come on show. */
 - (void)refreshVideo
 {
-    const NSInteger sel = _viewPick.indexOfSelectedItem;
-    if (!_viewFb || !_viewPic || sel < 0) return;
-    if (apple2debug_render_view(_dbg, (apple2debug_view)sel, _viewFb) != 0) {
-        _viewNote.stringValue = @"(no such page)";
-        return;
-    }
-    _viewNote.stringValue = [NSString stringWithFormat:@"decoded from $%04X, as the CPU sees memory now",
-                             apple2debug_view_base((apple2debug_view)sel)];
-    /* the pin and the hover are read again: their bytes change as the machine runs */
-    if (_pin.valid &&
-        (apple2debug_view_inspect(_dbg, (apple2debug_view)sel, _pinX, _pinY, &_pin) != 0 || !_pin.valid))
-        _pin.valid = 0;
-    if (_hov.valid &&
-        (apple2debug_view_inspect(_dbg, (apple2debug_view)sel, _hovX, _hovY, &_hov) != 0 || !_hov.valid))
-        _hov.valid = 0;
-    [self redrawVideo];
-}
-
-/* The cached page with the outlines drawn in (pin yellow, hover white), as
- * the picture, and the two labels. No re-render: a mouse move calls this. */
-- (void)redrawVideo
-{
-    if (!_viewFb || !_viewDraw || !_viewPic) return;
-    memcpy(_viewDraw, _viewFb, (size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT * sizeof(uint32_t));
-    if (_pin.valid) outlineRect(_viewDraw, _pin.rx, _pin.ry, _pin.rw, _pin.rh, 0x00FFE000);
-    if (_hov.valid) outlineRect(_viewDraw, _hov.rx, _hov.ry, _hov.rw, _hov.rh, 0x00FFFFFF);
-    NSImage *img = imageFromXRGB(_viewDraw, APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT, APPLE2VIEW_WIDTH);
-    if (img) _viewPic.image = img;
-    _viewHover.stringValue = _hov.valid ? cstr(_hov.text)
-                                        : @"Hover the picture to inspect it";
-    _viewPinned.stringValue = _pin.valid
-        ? [NSString stringWithFormat:@"Pinned:\n%@", cstr(_pin.text)]
-        : @"";
-}
-
-- (void)videoHoverX:(int)x y:(int)y
-{
-    const NSInteger sel = _viewPick.indexOfSelectedItem;
-    if (x < 0 || sel < 0 ||
-        apple2debug_view_inspect(_dbg, (apple2debug_view)sel, x, y, &_hov) != 0 || !_hov.valid) {
-        if (!_hov.valid && x < 0) return;       /* nothing changes */
-        _hov.valid = 0;
-    } else {
-        _hovX = x;
-        _hovY = y;
-    }
-    [self redrawVideo];
-}
-
-- (void)videoClickX:(int)x y:(int)y clicks:(NSInteger)clicks
-{
-    const NSInteger sel = _viewPick.indexOfSelectedItem;
-    apple2debug_pixel px;
-    if (sel < 0 || apple2debug_view_inspect(_dbg, (apple2debug_view)sel, x, y, &px) != 0 || !px.valid) return;
-    const BOOL same = _pin.valid && px.rx == _pin.rx && px.ry == _pin.ry && px.rw == _pin.rw && px.rh == _pin.rh;
-    _hov = px;
-    _hovX = x;
-    _hovY = y;
-    if (clicks >= 2) {
-        /* the first click of a double already toggled the pin: keep it pinned */
-        if (!same) {
-            _pin = px;
-            _pinX = x;
-            _pinY = y;
-        }
-        [self videoBreakOnWrites:px.addr];
-    } else if (same) {
-        _pin.valid = 0;
-    } else {
-        _pin = px;
-        _pinX = x;
-        _pinY = y;
-    }
-    [self redrawVideo];
-}
-
-/* A write breakpoint on one byte, unless an enabled unconditional one is there. */
-- (void)videoBreakOnWrites:(uint16_t)addr
-{
-    static apple2debug_breakpoint bps[MAX_BPS];
-    int n = apple2debug_breakpoint_list(_dbg, bps, MAX_BPS);
-    if (n < 0) n = 0;
-    if (n > MAX_BPS) n = MAX_BPS;
-    BOOL have = NO;
-    for (int i = 0; i < n; i++)
-        if (bps[i].enabled && bps[i].type == APPLE2DEBUG_BP_WRITE && bps[i].start == addr && bps[i].end == addr &&
-            bps[i].condition[0] == '\0')
-            have = YES;
-    if (!have) {
-        char err[256];
-        err[0] = '\0';
-        if (apple2debug_breakpoint_add(_dbg, APPLE2DEBUG_BP_WRITE, addr, addr, "", err, (int)sizeof err) < 0) {
-            NSString *e = cstr(err);
-            _viewStatus.stringValue = e.length ? e : @"The breakpoint was refused";
-            return;
-        }
-    }
-    _viewStatus.stringValue = [NSString stringWithFormat:@"Break on writes to $%04X", addr];
-}
-
-- (void)videoShowInMemory:(id)sender
-{
-    (void)sender;
-    const apple2debug_pixel *px = _pin.valid ? &_pin : (_hov.valid ? &_hov : NULL);
-    if (!px) {
-        _viewStatus.stringValue = @"Pin or hover a byte first";
-        return;
-    }
-    const int addr = px->addr;
-    [self showTab:TAB_MEMORY];
-    [self showMemLo:addr hi:addr];
-}
-
-- (void)videoUnpin:(id)sender
-{
-    (void)sender;
-    _pin.valid = 0;
-    [self redrawVideo];
+    [_videoTab refreshForce:!_videoShown];
+    _videoShown = YES;
 }
 
 - (void)refreshBps

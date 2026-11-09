@@ -494,8 +494,9 @@ int main(void)
         usleep(600000);
         f1 = (long)apple2session_frame_count(s);
         apple2debug_cpu_get(d, &c2);
-        CHECK(f1 - f0 >= 15, "frames run while engaged: %ld", f1 - f0);
-        CHECK(c2.frame > c.frame + 15, "frame counter stuck: %u -> %u", c.frame, c2.frame);
+        /* "keeps moving", not "keeps up": a loaded CI runner single-steps well under 60 fps */
+        CHECK(f1 - f0 >= 5, "frames run while engaged: %ld", f1 - f0);
+        CHECK(c2.frame > c.frame + 5, "frame counter stuck: %u -> %u", c.frame, c2.frame);
         CHECK(apple2session_copy_frame(s, fb, &serial, &w, &h), "frame serial did not move while engaged");
         for (k = 0; k < w * h; k++) if (snap[k] != fb[k]) diff++;
         CHECK(diff > 0, "the screen did not change after writing to the text page (%d px)", diff);

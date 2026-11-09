@@ -26,8 +26,11 @@
  * while the machine runs: a click in the disassembly selects a row, a
  * register edit says "stop the machine first" in the status line.
  *
- * The Video tab decodes a text, lo-res or hi-res page of memory (not
- * necessarily the one on screen) and the FujiNet tab shows every SmartPort
+ * The Video tab (dbg_video.c, over core/include/apple2vidtab.h) shows the screen
+ * as displayed or video memory decoded through the soft switches (following the
+ * screen, or a mode and page of your choosing), with an inspector, the switches,
+ * the palette and the timing; the Memory tab reads any bank (main, aux, language
+ * card, ROM) through a chooser. The FujiNet tab shows every SmartPort
  * packet on the SLIP link, both ways. Address fields take a label, else bare
  * hex, else the engine's grammar ($ or 0x, registers, arithmetic); the
  * register and byte boxes show hex without a prefix and read it back the
@@ -37,11 +40,12 @@
  * any case) picks the tab the window opens on: 0 Console, 1 Disassembly,
  * 2 Memory, 3 Breakpoints, 4 Watches, 5 Slots & I/O, 6 Trace, 7 History,
  * 8 Video, 9 FujiNet. For captures: APPLE2_DEBUGGER_VIEW (the Video tab's
- * page, an index), APPLE2_WATCH (a watch to add), APPLE2_WATCH_BREAK (a
+ * Decoded mode and page, an index 0..5: text1 text2 lores1 lores2 hires1
+ * hires2; the controller reads APPLE2_DEBUGGER_VIDEO_* itself), APPLE2_WATCH (a watch to add), APPLE2_WATCH_BREAK (a
  * break-on-change over it), APPLE2_MEM_GOTO (the Memory tab's Go to),
  * APPLE2_HISTORY=1 (recording on) and APPLE2_POPOUT (a tab to pop out, named
  * like APPLE2_DEBUGGER_TAB), APPLE2_VIDEO_PIN=x,y (pins that picture point on
- * the Video tab).
+ * the Video tab, in zoomed picture pixels).
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -61,6 +65,7 @@
 
 #include "apple2debug.h"
 #include "apple2memtools.h"
+#include "dbg_video.h"
 #include "resource.h"
 #include "../help/help_window.h"
 
@@ -145,7 +150,6 @@ static LRESULT apple2_accent_customdraw(const NMCUSTOMDRAW *cd, int on)
 
 #define DBG_CLASS "Apple2DebuggerWindow"
 #define DISASM_CLASS "Apple2DbgDisasm"
-#define PIXELS_CLASS "Apple2DbgPixels"
 #define MEMVIEW_CLASS "Apple2DbgMem"
 #define PAGE_CLASS "Apple2DbgPage"
 #define POP_CLASS "Apple2DbgPop"
@@ -171,9 +175,8 @@ enum {
     IDC_CON_OUT, IDC_CON_PROMPT, IDC_CON_IN,
     IDC_REG0, IDC_REG_LAST = IDC_REG0 + NREGS - 1,
     IDC_CHK0, IDC_CHK_LAST = IDC_CHK0 + NCHECKS - 1,
-    IDC_MEM_VIEW, IDC_MEM_GOTO, IDC_MEM_BACK, IDC_MEM_ON, IDC_MEM_WRITE,
+    IDC_MEM_VIEW, IDC_MEM_GOTO, IDC_MEM_BACK, IDC_MEM_ON, IDC_MEM_WRITE, IDC_MEM_BANK,
     IDC_FOLLOW_PC, IDC_JUMP, IDC_DISASM,
-    IDC_VIEW_PICK, IDC_VIEW_PIC,
     IDC_BP_LIST, IDC_BP_REMOVE, IDC_BP_CLEAR, IDC_BP_TYPE, IDC_BP_START, IDC_BP_END, IDC_BP_COND,
     IDC_BP_ADD, IDC_BP_CLEAR_HITS,
     IDC_WT_ENTRY, IDC_WT_ADD, IDC_WT_LIST, IDC_WT_REMOVE, IDC_WT_MEM, IDC_WT_BRK,
@@ -182,20 +185,9 @@ enum {
     IDC_H_REC0, IDC_H_REC1, IDC_H_CLEAR0, IDC_H_CLEAR1, IDC_H_FILTER0, IDC_H_FILTER1, IDC_H_RANGE0, IDC_H_RANGE1,
     IDC_H_TEXT0, IDC_H_TEXT1,
     IDC_FUJI_CLEAR, IDC_FUJI_TEXT, IDC_FUJI_STATE,
-    IDC_VID_SHOWMEM, IDC_VID_UNPIN,
     IDC_SAVE_KIND0, IDC_SAVE_KIND_LAST = IDC_SAVE_KIND0 + NSAVE - 1,
     IDC_LABEL_FIRST
 };
-
-/* The video render is XRGB8888 words, which in memory is exactly the BGRA
- * byte order GDI's 32-bit DIBs want. */
-typedef struct {
-    const uint32_t *px; /* owned by the debugger struct */
-    int w, h;
-    void *owner;        /* the debugger, for the mouse */
-    int tracking;       /* a WM_MOUSELEAVE is requested */
-    int mark[2][5];     /* hover, pin: on, then x, y, w, h in picture coordinates */
-} pixel_view;
 
 typedef struct {
     HWND hwnd, tabs;
@@ -221,6 +213,9 @@ typedef struct {
     /* memory */
     HWND mem_title, mem_view, goto_label, mem_goto, mem_back, mem_on, write_label, mem_write;
     HWND srch_kind, srch_entry, srch_next, srch_prev, srch_note;
+    HWND bank_label, mem_bank_pick;
+    int mem_bank;               /* an apple2debug_bank: what the dump, Go to, Write and Find use */
+    int bank_sig;               /* which banks the chooser lists (a bit each), -1 until built */
     int mem_top;                /* the dump's first address */
     int mem_hl;                 /* a highlighted range (Go to, Find, a watch) */
     uint16_t mem_hl_lo, mem_hl_hi;
@@ -237,14 +232,8 @@ typedef struct {
     apple2debug_line lines[DISASM_MAX];
     int line_count, pc_line;
 
-    /* video */
-    HWND vid_label, view_pick, vid_note, view_pic;
-    HWND vid_hover, vid_pinned, vid_status, vid_showmem, vid_unpin;
-    int vid_pin_on, vid_pin_x, vid_pin_y;   /* the pinned point, picture coordinates */
-    int vid_last_ok;                        /* a byte was hovered (the Show in Memory fallback) */
-    uint16_t vid_last_addr;
-    uint32_t px[APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT];
-    pixel_view pic;
+    /* video: the page holds its own controls (dbg_video.c) */
+    HWND video;
 
     /* breakpoints */
     HWND bp_hint, bp_stop, bp_remove, bp_clear, bp_clear_hits, bp_list, bp_empty;
@@ -582,6 +571,7 @@ static void make_fonts(debugger *d)
         EnumChildWindows(d->hwnd, refont_child, (LPARAM)map);
         for (p = 0; p < TAB_COUNT; p++)
             if (d->popped[p]) EnumChildWindows(d->popped[p], refont_child, (LPARAM)map);
+        if (d->video) dbg_video_fonts(d->video, d->ui, d->mono, d->dpi);
     }
     for (i = 0; i < 3; i++)
         if (old[i]) DeleteObject(old[i]);
@@ -950,12 +940,86 @@ static LRESULT CALLBACK memview_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcA(hwnd, msg, wp, lp);
 }
 
+/* "aux:" for a bank, "" for the CPU's view. */
+static const char *bank_prefix(int bank)
+{
+    static char buf[16];
+    const char *p = bank != APPLE2_BANK_CURRENT ? apple2debug_bank_prefix(bank) : NULL;
+    if (!p || !*p) return "";
+    snprintf(buf, sizeof buf, "%s:", p);
+    return buf;
+}
+
+/* The chooser lists the banks this machine has (a ][+ has no aux RAM): rebuilt
+ * when that changes, and only while attached (the engine answers "absent" for
+ * everything but the CPU's view otherwise). */
+static void mem_fill_banks(debugger *d)
+{
+    int b, sig = 0, n = 0, sel = 0;
+    const int first = d->bank_sig < 0;
+    if (!d->mem_bank_pick) return;
+    if (!first && !apple2debug_is_attached(d->dbg)) return;
+    for (b = 0; b < APPLE2_BANK_COUNT; b++)
+        if (first || b == APPLE2_BANK_CURRENT || apple2debug_bank_valid(d->dbg, b)) sig |= 1 << b;
+    if (sig == d->bank_sig) return;
+    d->bank_sig = sig;
+    if (!(sig & (1 << d->mem_bank))) d->mem_bank = APPLE2_BANK_CURRENT;
+    SendMessageA(d->mem_bank_pick, CB_RESETCONTENT, 0, 0);
+    for (b = 0; b < APPLE2_BANK_COUNT; b++) {
+        if (!(sig & (1 << b)) || !apple2debug_bank_name(b)) continue;
+        SendMessageA(d->mem_bank_pick, CB_ADDSTRING, 0, (LPARAM)apple2debug_bank_name(b));
+        SendMessageA(d->mem_bank_pick, CB_SETITEMDATA, (WPARAM)n, (LPARAM)b);
+        if (b == d->mem_bank) sel = n;
+        n++;
+    }
+    SendMessageA(d->mem_bank_pick, CB_SETCURSEL, (WPARAM)sel, 0);
+}
+
+/* The header line names the bank. */
+static void mem_title_update(debugger *d)
+{
+    char t[160];
+    uint16_t lo = 0, hi = 0xFFFF;
+    if (d->mem_bank == APPLE2_BANK_CURRENT) {
+        snprintf(t, sizeof t, "Memory (the CPU's view through the live bank map)");
+    } else {
+        apple2debug_bank_range(d->dbg, d->mem_bank, &lo, &hi);
+        snprintf(t, sizeof t, "Memory: %s ($%04X-$%04X)", apple2debug_bank_name(d->mem_bank), lo, hi);
+    }
+    set_label(d->mem_title, t);
+}
+
 static void refresh_mem(debugger *d)
 {
+    mem_fill_banks(d);
     memset(d->mem_buf, 0, sizeof d->mem_buf);
-    apple2debug_read(d->dbg, (uint16_t)d->mem_top, d->mem_buf, MEM_BYTES);
+    if (d->mem_bank == APPLE2_BANK_CURRENT)
+        apple2debug_read(d->dbg, (uint16_t)d->mem_top, d->mem_buf, MEM_BYTES);
+    else
+        apple2debug_read_bank(d->dbg, d->mem_bank, (uint16_t)d->mem_top, d->mem_buf, MEM_BYTES);
+    mem_title_update(d);
     mem_sync_scroll(d);
     InvalidateRect(d->mem_view, NULL, FALSE);
+}
+
+/* Choose the bank the dump shows (the chooser follows); the dump moves into
+ * the bank's addresses when it is outside them. 0 when the bank is not listed. */
+static int set_mem_bank(debugger *d, int bank)
+{
+    int i, n = (int)SendMessageA(d->mem_bank_pick, CB_GETCOUNT, 0, 0);
+    uint16_t lo = 0, hi = 0xFFFF;
+    for (i = 0; i < n; i++)
+        if ((int)SendMessageA(d->mem_bank_pick, CB_GETITEMDATA, (WPARAM)i, 0) == bank) break;
+    if (i >= n) return 0;
+    SendMessageA(d->mem_bank_pick, CB_SETCURSEL, (WPARAM)i, 0);
+    if (bank != d->mem_bank) d->mem_hl = 0;
+    d->mem_bank = bank;
+    if (bank != APPLE2_BANK_CURRENT && apple2debug_bank_range(d->dbg, bank, &lo, &hi) &&
+        (d->mem_top + MEM_BYTES - 1 < (int)lo || d->mem_top > (int)hi)) {
+        d->mem_top = (int)lo & ~0xF;
+        if (d->mem_top > 0x10000 - MEM_BYTES) d->mem_top = 0x10000 - MEM_BYTES;
+    }
+    return 1;
 }
 
 /* The dump from just above lo, lo..hi highlighted and scrolled to (a Go to,
@@ -1017,25 +1081,9 @@ static void refresh_disasm(debugger *d)
     InvalidateRect(d->disasm, NULL, FALSE);
 }
 
-/* Decode whichever page the combo names. This shows a PAGE, not what the
- * machine is currently displaying -- which is the point: it is how you see
- * the buffer a program is drawing into before it flips to it. */
-static void video_pin_refresh(debugger *d);
-
 static void refresh_video(debugger *d)
 {
-    char note[120];
-    int sel = (int)SendMessageA(d->view_pick, CB_GETCURSEL, 0, 0);
-    if (sel < 0) sel = 0;
-    if (apple2debug_render_view(d->dbg, (apple2debug_view)sel, d->px) != 0) return;
-    d->pic.px = d->px;
-    d->pic.w = APPLE2VIEW_WIDTH;
-    d->pic.h = APPLE2VIEW_HEIGHT;
-    snprintf(note, sizeof note, "Memory from $%04X as the CPU sees it now; not necessarily what is on screen",
-             apple2debug_view_base((apple2debug_view)sel));
-    set_label(d->vid_note, note);
-    video_pin_refresh(d);
-    InvalidateRect(d->view_pic, NULL, FALSE);
+    if (d->video) dbg_video_refresh(d->video, 0);
 }
 
 static void lv_set(HWND lv, int row, int col, const char *text)
@@ -1431,13 +1479,14 @@ static void tick(debugger *d)
             refresh_status(d);
             refresh_cpu(d);
             for (p = 0; p < TAB_COUNT; p++)
-                if (page_visible(d, p) && p != TAB_HISTORY && p != TAB_TRACE) refresh_tab(d, p);
+                if (page_visible(d, p) && p != TAB_HISTORY && p != TAB_TRACE && p != TAB_VIDEO) refresh_tab(d, p);
         }
         if (++d->h_ticks >= HIST_TICKS) {
             d->h_ticks = 0;
             if (page_visible(d, TAB_TRACE)) hist_refresh(d, 0, 0);
         }
     }
+    if (page_visible(d, TAB_VIDEO)) refresh_video(d);       /* every beat (~100 ms) while the tab is showing */
 }
 
 /* ---- actions ------------------------------------------------------------------ */
@@ -1591,13 +1640,24 @@ static void on_check(debugger *d, int i)
  * found highlighted and scrolled to. */
 static void on_mem_goto(debugger *d)
 {
-    char buf[64], err[96];
+    char buf[64], err[96], *text = buf;
     uint16_t lo, hi;
+    int bank = d->mem_bank, consumed = 0, b;
     edit_text(d->mem_goto, buf, sizeof buf);
-    if (!parse_range_ui(d, buf, &lo, &hi, err, sizeof err)) {
+    while (*text == ' ' || *text == '\t') text++;
+    b = apple2debug_bank_parse(text, &consumed);     /* "aux:$0400" names the bank */
+    if (b >= 0) {
+        bank = b;
+        text += consumed;
+    }
+    if (!parse_range_ui(d, text, &lo, &hi, err, sizeof err)) {
         d->mem_hl = 0;
         refresh_mem(d);
         toast(d, err);
+        return;
+    }
+    if (bank != d->mem_bank && !set_mem_bank(d, bank)) {
+        toast(d, "That bank is not present on this machine");
         return;
     }
     show_in_memory(d, lo, hi);
@@ -1622,10 +1682,40 @@ static void on_search(debugger *d, int backward)
         return;
     }
     from = d->mem_hl ? (backward ? d->mem_hl_lo : (d->mem_hl_lo + 1) & 0xFFFF) : d->mem_top;
-    r = apple2debug_search_next(d->dbg, pat, n, mask, flags, (uint16_t)from, backward, &found);
+    if (d->mem_bank == APPLE2_BANK_CURRENT) {
+        r = apple2debug_search_next(d->dbg, pat, n, mask, flags, (uint16_t)from, backward, &found);
+    } else {
+        /* the bank's own addresses: first match from here on, or the last one before here */
+        uint16_t lo = 0, hi = 0xFFFF, hits[256];
+        int cnt;
+        r = 0;
+        if (!apple2debug_bank_range(d->dbg, d->mem_bank, &lo, &hi)) {
+            set_label(d->srch_note, "That bank is not present");
+            return;
+        }
+        if (!backward) {
+            cnt = from > hi ? 0 : apple2debug_search_bank(d->dbg, d->mem_bank, pat, n, mask, flags, (uint16_t)from, hi, &found, 1);
+            r = cnt;
+        } else if (from > lo) {
+            unsigned start = lo;
+            while (start < (unsigned)from) {
+                cnt = apple2debug_search_bank(d->dbg, d->mem_bank, pat, n, mask, flags, (uint16_t)start, (uint16_t)(from - 1),
+                                              hits, 256);
+                if (cnt < 0) {
+                    r = -1;
+                    break;
+                }
+                if (cnt == 0) break;
+                found = hits[cnt - 1];
+                r = 1;
+                if (cnt < 256) break;
+                start = (unsigned)found + 1;
+            }
+        }
+    }
     if (r > 0) {
-        char note[48];
-        snprintf(note, sizeof note, "Found at $%04X", found);
+        char note[64];
+        snprintf(note, sizeof note, "Found at %s$%04X", bank_prefix(d->mem_bank), found);
         set_label(d->srch_note, note);
         show_in_memory(d, found, (uint16_t)(found + n - 1));
     } else {
@@ -1646,10 +1736,15 @@ static void on_mem_page(debugger *d, int dir)
 static void on_mem_write(debugger *d)
 {
     char buf[256], err[96], *tok, *save = NULL, msg[96];
-    int addr, n = 0;
+    int addr, n = 0, bank = d->mem_bank, consumed = 0, b;
     edit_text(d->mem_write, buf, sizeof buf);
     tok = strtok_s(buf, " \t,", &save);
     if (!tok) return;
+    b = apple2debug_bank_parse(tok, &consumed);      /* "aux:0400 3F" writes to that bank */
+    if (b >= 0) {
+        bank = b;
+        tok += consumed;
+    }
     addr = resolve_addr(d, tok, err, sizeof err);
     if (addr < 0) {
         toast(d, err);
@@ -1661,14 +1756,15 @@ static void on_mem_write(debugger *d)
             toast(d, "A value is a byte (00-FF)");
             return;
         }
-        apple2debug_write(d->dbg, (uint16_t)(addr + n), (uint8_t)v);
+        if (bank == APPLE2_BANK_CURRENT) apple2debug_write(d->dbg, (uint16_t)(addr + n), (uint8_t)v);
+        else apple2debug_write_bank(d->dbg, bank, (uint16_t)(addr + n), (uint8_t)v);
         n++;
     }
     if (!n) {
         toast(d, "Type: address value [value...]");
         return;
     }
-    snprintf(msg, sizeof msg, "Wrote %d byte%s at $%04X", n, n == 1 ? "" : "s", addr);
+    snprintf(msg, sizeof msg, "Wrote %d byte%s at %s$%04X", n, n == 1 ? "" : "s", bank_prefix(bank), addr);
     toast(d, msg);
     resync(d);
 }
@@ -1847,16 +1943,21 @@ static void goto_tab(debugger *d, int page);
 static void on_watch_memory(debugger *d)
 {
     uint16_t lo, hi;
+    int bank = APPLE2_BANK_CURRENT;
     const int i = watch_selected(d);
     if (i < 0) {
         set_label(d->wt_msg, "Select a watch first");
         return;
     }
-    if (!apple2watch_range(d->dbg, i, &lo, &hi)) {
+    if (!apple2watch_range_bank(d->dbg, i, &bank, &lo, &hi)) {
         set_label(d->wt_msg, "That watch does not resolve to an address");
         return;
     }
     set_label(d->wt_msg, "");
+    if (bank != APPLE2_BANK_CURRENT && bank != d->mem_bank && !set_mem_bank(d, bank)) {
+        set_label(d->wt_msg, "That watch's bank is not present on this machine");
+        return;
+    }
     show_in_memory(d, lo, hi);
     goto_tab(d, TAB_MEMORY);
 }
@@ -1934,200 +2035,18 @@ static void on_accept(debugger *d, int id)
     }
 }
 
-/* ---- the video inspector: hover, pin, break on writes ------------------------------ */
+/* ---- the Video tab (dbg_video.c) ---------------------------------------------------- */
 
-static apple2debug_view video_view(debugger *d)
+/* Show in Memory: the Memory tab on a bank and address. */
+static void video_show_memory(void *ctx, int bank, unsigned lo, unsigned hi)
 {
-    int sel = (int)SendMessageA(d->view_pick, CB_GETCURSEL, 0, 0);
-    return (apple2debug_view)(sel < 0 ? 0 : sel);
-}
-
-static void video_set_mark(debugger *d, int k, const apple2debug_pixel *p)
-{
-    int *m = d->pic.mark[k];
-    int on = p ? 1 : 0, x = p ? p->rx : 0, y = p ? p->ry : 0, w = p ? p->rw : 0, h = p ? p->rh : 0;
-    if (m[0] == on && m[1] == x && m[2] == y && m[3] == w && m[4] == h) return;
-    m[0] = on; m[1] = x; m[2] = y; m[3] = w; m[4] = h;
-    InvalidateRect(d->view_pic, NULL, FALSE);
-}
-
-static void video_pin_refresh(debugger *d)
-{
-    apple2debug_pixel p;
-    char buf[300];
-    if (!d->vid_pin_on) return;
-    if (apple2debug_view_inspect(d->dbg, video_view(d), d->vid_pin_x, d->vid_pin_y, &p) != 0 || !p.valid) return;
-    video_set_mark(d, 1, &p);
-    snprintf(buf, sizeof buf, "Pinned:\n%s", p.text);
-    set_label(d->vid_pinned, buf);
-}
-
-static void video_unpin(debugger *d)
-{
-    d->vid_pin_on = 0;
-    video_set_mark(d, 1, NULL);
-    set_label(d->vid_pinned, "");
-}
-
-static void video_pin_at(debugger *d, int x, int y)
-{
-    d->vid_pin_on = 1;
-    d->vid_pin_x = x;
-    d->vid_pin_y = y;
-    video_pin_refresh(d);
-}
-
-static void video_break_writes(debugger *d, uint16_t addr)
-{
-    apple2debug_breakpoint list[MAX_BPS];
-    char err[96], msg[140];
-    int n = apple2debug_breakpoint_list(d->dbg, list, MAX_BPS), i;
-    for (i = 0; i < n; i++)
-        if ((list[i].type & APPLE2DEBUG_BP_WRITE) && list[i].enabled && list[i].start == addr &&
-            list[i].end == addr && !list[i].condition[0]) {
-            snprintf(msg, sizeof msg, "Break on writes to $%04X", addr);
-            set_label(d->vid_status, msg);
-            return;
-        }
-    err[0] = 0;
-    if (apple2debug_breakpoint_add(d->dbg, APPLE2DEBUG_BP_WRITE, addr, addr, "", err, sizeof err) >= 0)
-        snprintf(msg, sizeof msg, "Break on writes to $%04X", addr);
-    else
-        snprintf(msg, sizeof msg, "%s", err[0] ? err : "Could not add the breakpoint");
-    set_label(d->vid_status, msg);
-}
-
-/* kind 0 move, 1 leave, 2 click, 3 double click; x, y in the picture's client area */
-static void video_mouse(debugger *d, int kind, int mx, int my)
-{
-    apple2debug_pixel p;
-    RECT c;
-    int x, y, ok = 0;
-    if (kind == 1) {
-        video_set_mark(d, 0, NULL);
-        set_label(d->vid_hover, "");
+    debugger *d = ctx;
+    if (bank != d->mem_bank && !set_mem_bank(d, bank)) {
+        toast(d, "That bank is not present on this machine");
         return;
     }
-    GetClientRect(d->view_pic, &c);
-    if (c.right <= 0 || c.bottom <= 0 || d->pic.w <= 0) return;
-    x = mx * d->pic.w / c.right;
-    y = my * d->pic.h / c.bottom;
-    if (mx >= 0 && my >= 0 && mx < c.right && my < c.bottom &&
-        apple2debug_view_inspect(d->dbg, video_view(d), x, y, &p) == 0 && p.valid)
-        ok = 1;
-    if (!ok) {
-        video_set_mark(d, 0, NULL);
-        set_label(d->vid_hover, "");
-        return;
-    }
-    d->vid_last_ok = 1;
-    d->vid_last_addr = p.addr;
-    if (kind == 0) {
-        video_set_mark(d, 0, &p);
-        set_label(d->vid_hover, p.text);
-        return;
-    }
-    if (kind == 2 && d->vid_pin_on && d->pic.mark[1][1] == p.rx && d->pic.mark[1][2] == p.ry) {
-        video_unpin(d);
-        return;
-    }
-    video_pin_at(d, x, y);
-    if (kind == 3) video_break_writes(d, p.addr);
-}
-
-static void on_vid_showmem(debugger *d)
-{
-    apple2debug_pixel p;
-    int addr = -1;
-    if (d->vid_pin_on && apple2debug_view_inspect(d->dbg, video_view(d), d->vid_pin_x, d->vid_pin_y, &p) == 0 &&
-        p.valid)
-        addr = p.addr;
-    else if (d->vid_last_ok)
-        addr = d->vid_last_addr;
-    if (addr < 0) {
-        set_label(d->vid_status, "Hover or click a byte of the picture first");
-        return;
-    }
-    set_label(d->vid_status, "");
-    show_in_memory(d, (uint16_t)addr, (uint16_t)addr);
+    show_in_memory(d, (uint16_t)lo, (uint16_t)hi);
     goto_tab(d, TAB_MEMORY);
-}
-
-/* ---- the video pictures ----------------------------------------------------------- */
-
-static void paint_pixels(HWND hwnd, HDC hdc)
-{
-    pixel_view *pv = (pixel_view *)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
-    RECT c;
-    GetClientRect(hwnd, &c);
-    if (pv && pv->px && pv->w > 0 && pv->h > 0) {
-        BITMAPINFO bmi;
-        memset(&bmi, 0, sizeof bmi);
-        bmi.bmiHeader.biSize = sizeof bmi.bmiHeader;
-        bmi.bmiHeader.biWidth = pv->w;
-        bmi.bmiHeader.biHeight = -pv->h; /* top-down */
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-        SetStretchBltMode(hdc, COLORONCOLOR); /* nearest: keep pixels */
-        StretchDIBits(hdc, 0, 0, c.right, c.bottom, 0, 0, pv->w, pv->h, pv->px, &bmi,
-                      DIB_RGB_COLORS, SRCCOPY);
-        if (pv->w > 0 && pv->h > 0) {
-            static const COLORREF col[2] = { RGB(255, 255, 255), RGB(255, 220, 0) };
-            int k;
-            HGDIOBJ oldb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            for (k = 0; k < 2; k++) {
-                HPEN pen, oldp;
-                if (!pv->mark[k][0]) continue;
-                pen = CreatePen(PS_SOLID, 1, col[k]);
-                oldp = SelectObject(hdc, pen);
-                Rectangle(hdc, pv->mark[k][1] * c.right / pv->w, pv->mark[k][2] * c.bottom / pv->h,
-                          (pv->mark[k][1] + pv->mark[k][3]) * c.right / pv->w + 1,
-                          (pv->mark[k][2] + pv->mark[k][4]) * c.bottom / pv->h + 1);
-                SelectObject(hdc, oldp);
-                DeleteObject(pen);
-            }
-            SelectObject(hdc, oldb);
-        }
-    } else {
-        FillRect(hdc, &c, (HBRUSH)GetStockObject(BLACK_BRUSH));
-    }
-}
-
-static void video_mouse(debugger *d, int kind, int x, int y);
-
-static LRESULT CALLBACK pixels_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
-{
-    if (msg == WM_PAINT) {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        paint_pixels(hwnd, hdc);
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
-    if (msg == WM_PRINTCLIENT) {
-        paint_pixels(hwnd, (HDC)wp);
-        return 0;
-    }
-    if (msg == WM_ERASEBKGND) return 1;
-    if (msg == WM_MOUSEMOVE || msg == WM_MOUSELEAVE || msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
-        pixel_view *pv = (pixel_view *)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
-        if (pv && pv->owner) {
-            if (msg == WM_MOUSEMOVE && !pv->tracking) {
-                TRACKMOUSEEVENT te;
-                memset(&te, 0, sizeof te);
-                te.cbSize = sizeof te;
-                te.dwFlags = TME_LEAVE;
-                te.hwndTrack = hwnd;
-                if (TrackMouseEvent(&te)) pv->tracking = 1;
-            }
-            if (msg == WM_MOUSELEAVE) pv->tracking = 0;
-            video_mouse((debugger *)pv->owner, msg == WM_MOUSEMOVE ? 0 : msg == WM_MOUSELEAVE ? 1 :
-                        msg == WM_LBUTTONDOWN ? 2 : 3, (short)LOWORD(lp), (short)HIWORD(lp));
-            return 0;
-        }
-    }
-    return DefWindowProcA(hwnd, msg, wp, lp);
 }
 
 /* ---- the disassembly -------------------------------------------------------------- */
@@ -2370,19 +2289,6 @@ static HWND checkbox(debugger *d, const char *text, int id)
     return child(d, "BUTTON", text, BS_AUTOCHECKBOX | WS_TABSTOP, id, d->ui);
 }
 
-static HWND pixels(debugger *d, int id, pixel_view *pv, const uint32_t *px)
-{
-    HWND v = child(d, PIXELS_CLASS, "", 0, id, d->ui);
-    pv->px = px;
-    pv->w = 0;
-    pv->h = 0;
-    pv->owner = d;
-    pv->tracking = 0;
-    memset(pv->mark, 0, sizeof pv->mark);
-    SetWindowLongPtrA(v, GWLP_USERDATA, (LONG_PTR)pv);
-    return v;
-}
-
 static void size_columns(debugger *d)
 {
     static const int widths[3] = { 60, 700, 80 };
@@ -2491,6 +2397,11 @@ static void build_controls(debugger *d)
     /* Memory: the dump, Go to, 4K paging, Write, and the search bar */
     begin_page(d, TAB_MEMORY);
     d->mem_title = label(d, "Memory (the CPU's view through the live bank map)", d->ui_bold, SS_LEFT);
+    d->bank_label = dim_label(d, "Bank", SS_LEFT);
+    d->mem_bank_pick = child(d, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, IDC_MEM_BANK, d->ui);
+    d->mem_bank = APPLE2_BANK_CURRENT;
+    d->bank_sig = -1;
+    mem_fill_banks(d);
     d->mem_view = CreateWindowExA(WS_EX_CLIENTEDGE, MEMVIEW_CLASS, "", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP, 0, 0,
                                   10, 10, d->pg[TAB_MEMORY], (HMENU)(INT_PTR)IDC_MEM_VIEW, inst, NULL);
     d->goto_label = dim_label(d, "Go to", SS_LEFT);
@@ -2598,21 +2509,9 @@ static void build_controls(debugger *d)
         d->h_text[i] = view(d, IDC_H_TEXT0 + i, WS_HSCROLL);
     }
 
-    /* Video: a page of memory decoded as text, lo-res or hi-res. The page list
-     * comes from the engine, so a view added there shows up here. */
+    /* Video: one child page with its own controls and controller */
     begin_page(d, TAB_VIDEO);
-    d->vid_label = label(d, "Page", d->ui_bold, SS_LEFT);
-    d->view_pick = child(d, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, IDC_VIEW_PICK, d->ui);
-    for (i = 0; apple2debug_view_name(i); i++)
-        SendMessageA(d->view_pick, CB_ADDSTRING, 0, (LPARAM)apple2debug_view_name(i));
-    SendMessageA(d->view_pick, CB_SETCURSEL, 0, 0);
-    d->vid_note = dim_label(d, "", SS_LEFT | SS_ENDELLIPSIS);
-    d->view_pic = pixels(d, IDC_VIEW_PIC, &d->pic, d->px);
-    d->vid_hover = label(d, "", d->mono, SS_LEFT);
-    d->vid_pinned = label(d, "", d->mono, SS_LEFT);
-    d->vid_status = dim_label(d, "", SS_LEFT | SS_ENDELLIPSIS);
-    d->vid_showmem = button(d, "Show in Memory", IDC_VID_SHOWMEM);
-    d->vid_unpin = button(d, "Unpin", IDC_VID_UNPIN);
+    d->video = dbg_video_create(d->pg[TAB_VIDEO], d->ui, d->mono, d->dpi, d->session, video_show_memory, d);
 
     /* FujiNet: the note and the log are UTF-8 (see wide_view_text) */
     begin_page(d, TAB_FUJINET);
@@ -2649,6 +2548,7 @@ static void show_page(debugger *d, int page)
     for (p = 0; p < TAB_COUNT; p++)   /* a tab's controls follow its container */
         ShowWindow(d->pg[p], d->popped[p] || p == page ? SW_SHOW : SW_HIDE);
     show_bp_list(d);
+    if (page == TAB_VIDEO && d->video) dbg_video_refresh(d->video, 1);
 }
 
 static void place(HWND h, int x, int y, int w, int hgt)
@@ -2689,8 +2589,12 @@ static void layout_page(debugger *d, int page, int pw, int ph)
     case TAB_MEMORY: {
         /* the dump, then Go to / paging / Write, then the search bar */
         const int row2 = py + ph - eh, row1 = row2 - eh - S(d, 8);
-        place(d->mem_title, px, py, pw, lh);
-        place(d->mem_view, px, py + lh + S(d, 4), pw, row1 - S(d, 6) - (py + lh + S(d, 4)));
+        const int bank_w = S(d, 220), head = eh + S(d, 4);
+        w = text_w(d, d->ui, "Bank") + S(d, 6);
+        place(d->mem_title, px, py + (eh - lh) / 2, pw - bank_w - w - S(d, 8) > S(d, 100) ? pw - bank_w - w - S(d, 8) : S(d, 100), lh);
+        place(d->bank_label, px + pw - bank_w - w, py + (eh - lh) / 2, w, lh);
+        place(d->mem_bank_pick, px + pw - bank_w, py, bank_w, S(d, 200));
+        place(d->mem_view, px, py + head, pw, row1 - S(d, 6) - (py + head));
         y = row1 + (eh - lh) / 2;
         x = px;
         w = text_w(d, d->ui, "Go to") + S(d, 6);
@@ -2823,39 +2727,9 @@ static void layout_page(debugger *d, int page, int pw, int ph)
         break;
     }
 
-    case TAB_VIDEO: {
-        /* the page picker over the picture, which takes the largest whole
-         * multiple of its size that fits (nearest-neighbour: it is an
-         * inspector), or less when the window is smaller than one */
-        double sc;
-        int pwid, phgt;
-        const int top = py + eh + S(d, 10), ah = ph - eh - S(d, 10);
-        const int cw = d->mono_w * 40 < pw / 2 ? d->mono_w * 40 : pw / 2;
-        const int aw = pw - cw - S(d, 12);
-        int cy;
-        w = text_w(d, d->ui_bold, "Page") + S(d, 8);
-        place(d->vid_label, px, py + (eh - lh) / 2, w, lh);
-        place(d->view_pick, px + w, py, S(d, 220), S(d, 240));
-        place(d->vid_note, px + w + S(d, 232), py + (eh - lh) / 2, pw - w - S(d, 232), lh);
-        sc = (double)aw / APPLE2VIEW_WIDTH;
-        if ((double)ah / APPLE2VIEW_HEIGHT < sc) sc = (double)ah / APPLE2VIEW_HEIGHT;
-        if (sc >= 1.0) sc = (double)(int)sc;
-        pwid = (int)(APPLE2VIEW_WIDTH * sc);
-        phgt = (int)(APPLE2VIEW_HEIGHT * sc);
-        place(d->view_pic, px, top, pwid, phgt);
-        x = px + aw + S(d, 12);
-        cy = top;
-        place(d->vid_hover, x, cy, cw, d->mono_h * 7);
-        cy += d->mono_h * 7 + S(d, 8);
-        place(d->vid_pinned, x, cy, cw, d->mono_h * 8);
-        cy += d->mono_h * 8 + S(d, 8);
-        w = btn_w(d, "Show in Memory");
-        place(d->vid_showmem, x, cy, w, bh);
-        place(d->vid_unpin, x + w + gap, cy, btn_w(d, "Unpin"), bh);
-        cy += bh + S(d, 6);
-        place(d->vid_status, x, cy, cw, lh);
+    case TAB_VIDEO:
+        if (d->video) dbg_video_place(d->video, px, py, pw, ph);
         break;
-    }
 
     case TAB_FUJINET: {
         /* the packets left (a note and Clear over them), the link's state and
@@ -3320,14 +3194,13 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_OUT: apple2debug_step_out(d->dbg); settle_and_sync(d, 1); return 0;
         case IDC_SCANLINE: apple2debug_scanline(d->dbg, 1); settle_and_sync(d, 1); return 0;
         case IDC_FRAME: apple2debug_frame(d->dbg, 1); settle_and_sync(d, 1); return 0;
-        case IDC_VIEW_PICK:
+        case IDC_MEM_BANK:
             if (HIWORD(wp) == CBN_SELCHANGE) {
-                video_unpin(d);
-                refresh_video(d);
+                const int sel = (int)SendMessageA(d->mem_bank_pick, CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && set_mem_bank(d, (int)SendMessageA(d->mem_bank_pick, CB_GETITEMDATA, (WPARAM)sel, 0)))
+                    refresh_mem(d);
             }
             return 0;
-        case IDC_VID_SHOWMEM: on_vid_showmem(d); return 0;
-        case IDC_VID_UNPIN: video_unpin(d); return 0;
         case IDC_RUN_TO: on_run_to(d); return 0;
         case IDC_TOGGLE_BP: on_toggle_bp(d); return 0;
         case IDC_HELP_BTN: apple2_help_for(d->hwnd); return 0;
@@ -3473,11 +3346,11 @@ static void env_hooks(debugger *d)
     if ((v = getenv("APPLE2_HISTORY")) != NULL && *v && *v != '0') apple2debug_trace_enable(d->dbg, 1);
     if ((v = getenv("APPLE2_DEBUGGER_VIEW")) != NULL && *v) {
         const int idx = atoi(v);
-        if (idx >= 0 && idx < APPLE2VIEW_COUNT) SendMessageA(d->view_pick, CB_SETCURSEL, (WPARAM)idx, 0);
+        if (idx >= 0 && idx < 6 && d->video) dbg_video_env_view(d->video, idx);
     }
     if ((v = getenv("APPLE2_VIDEO_PIN")) != NULL && *v) {
         int pxl, pyl;
-        if (sscanf(v, "%d,%d", &pxl, &pyl) == 2) video_pin_at(d, pxl, pyl);
+        if (sscanf(v, "%d,%d", &pxl, &pyl) == 2 && d->video) dbg_video_env_pin(d->video, pxl, pyl);
     }
     if ((tab = tab_from_env_var("APPLE2_POPOUT")) >= 0) pop_out(d, tab);
     resync(d);
@@ -3505,14 +3378,13 @@ void apple2_debugger_show(HWND parent, apple2session *session)
     }
 
     icc.dwSize = sizeof icc;
-    icc.dwICC = ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES;
+    icc.dwICC = ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icc);
     inst = (HINSTANCE)GetWindowLongPtrA(parent, GWLP_HINSTANCE);
     if (!inst) inst = GetModuleHandleA(NULL);
     if (!registered) {
         register_class(inst, DBG_CLASS, dbg_proc, (HBRUSH)(COLOR_BTNFACE + 1), CS_HREDRAW | CS_VREDRAW);
         register_class(inst, DISASM_CLASS, disasm_proc, NULL, CS_DBLCLKS);
-        register_class(inst, PIXELS_CLASS, pixels_proc, NULL, CS_DBLCLKS);
         register_class(inst, MEMVIEW_CLASS, memview_proc, NULL, 0);
         register_class(inst, PAGE_CLASS, page_proc, (HBRUSH)(COLOR_BTNFACE + 1), 0);
         register_class(inst, POP_CLASS, pop_proc, (HBRUSH)(COLOR_BTNFACE + 1), CS_HREDRAW | CS_VREDRAW);

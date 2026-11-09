@@ -35,6 +35,7 @@
 
 #include "DebuggerWindow.h"
 #include "../help/HelpWindow.h"
+#include "VideoTab.h"
 
 #include "apple2memtools.h"
 
@@ -55,6 +56,7 @@
 #include <QPixmap>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QStandardItemModel>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QShortcut>
@@ -70,6 +72,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 #define DISASM_WINDOW 64        /* lines fetched; as many show as fit */
 #define MEM_ROWS 256            /* 4K of memory, 16 bytes a row */
@@ -359,12 +362,14 @@ DebuggerWindow::DebuggerWindow(apple2session *session, QWidget *parent)
     }
     int tab = tabFromEnv();
     {
-        /* APPLE2_DEBUGGER_VIEW: land on a video page (an index into
-         * apple2debug_view_name) instead of the console */
+        /* APPLE2_DEBUGGER_VIEW: land on a decoded video page (0..5 =
+         * text1 text2 lores1 lores2 hires1 hires2) instead of the console */
         bool ok = false;
         const int idx = qEnvironmentVariableIntValue("APPLE2_DEBUGGER_VIEW", &ok);
-        if (ok && idx >= 0 && idx < APPLE2VIEW_COUNT) {
-            m_viewPick->setCurrentIndex(idx);
+        if (ok && idx >= 0 && idx < 6) {
+            /* text1 text2 lores1 lores2 hires1 hires2 */
+            static const int modes[3] = { APPLE2VID_M_TEXT40, APPLE2VID_M_LORES, APPLE2VID_M_HIRES };
+            m_video->showDecoded(modes[idx / 2], idx % 2 + 1);
             if (tab < 0) tab = TAB_VIDEO;
         }
     }
@@ -379,6 +384,7 @@ DebuggerWindow::DebuggerWindow(apple2session *session, QWidget *parent)
     connect(m_tabs, &QTabWidget::currentChanged, this, [this, setHelpContext](int) {
         const int page = currentTab();
         setHelpContext(page);
+        if (page == TAB_VIDEO) m_videoForce = true;
         if (page == TAB_HISTORY) m_hSeen[1] = -1;
         refreshPage(page, false);
         if (page == TAB_CONSOLE) m_conIn->setFocus();
@@ -400,16 +406,15 @@ DebuggerWindow::DebuggerWindow(apple2session *session, QWidget *parent)
             char err[160] = "";
             apple2debug_breakpoint_add(m_dbg, APPLE2DEBUG_BP_WRITE, lo, hi, "value != old", err, sizeof err);
         }
-        if (!mg.isEmpty() && apple2sym_parse_range(m_dbg, mg.constData(), &lo, &hi)) showInMemory(lo, hi);
+        int mgBank = APPLE2_BANK_CURRENT;
+        if (!mg.isEmpty() && apple2sym_parse_range_bank(m_dbg, mg.constData(), &mgBank, &lo, &hi))
+            showInMemory(lo, hi, mgBank == APPLE2_BANK_CURRENT ? -1 : mgBank);
         /* APPLE2_VIDEO_PIN="x,y" pins a point of the Video picture, for captures */
         const QStringList pin = qEnvironmentVariable("APPLE2_VIDEO_PIN").split(QLatin1Char(','));
         bool okx = false, oky = false;
         if (pin.size() == 2) {
             const int px = pin[0].trimmed().toInt(&okx), py = pin[1].trimmed().toInt(&oky);
-            if (okx && oky) {
-                refreshVideo();
-                viewPin(px, py);
-            }
+            if (okx && oky) m_video->pinAt(px, py);
         }
         if (tabFromEnv("APPLE2_POPOUT") >= 0) popOut(tabFromEnv("APPLE2_POPOUT"));
     }
@@ -588,7 +593,21 @@ QWidget *DebuggerWindow::buildMemory()
     auto *w = new QWidget;
     auto *v = new QVBoxLayout(w);
 
-    v->addWidget(titleLabel(QStringLiteral("Memory (as the CPU sees it through the bank map)")));
+    auto *head = new QHBoxLayout;
+    m_memTitle = titleLabel(QStringLiteral("Memory (as the CPU sees it through the bank map)"));
+    head->addWidget(m_memTitle, 1);
+    head->addWidget(new QLabel(QStringLiteral("Bank")));
+    m_memBank = new QComboBox;
+    m_memBank->setObjectName(QStringLiteral("memBank"));
+    m_memBank->setToolTip(QStringLiteral("Which memory the dump, Go to, Write and Search use. A prefix in Go to "
+                                         "(aux:$0400, lc2:$D000, rom:FA62) picks it too."));
+    for (int b = 0; b < APPLE2_BANK_COUNT; ++b) m_memBank->addItem(QString::fromUtf8(apple2debug_bank_name(b)));
+    connect(m_memBank, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        m_hl = false;                   /* the marked range was in another bank */
+        refreshMem();
+    });
+    head->addWidget(m_memBank);
+    v->addLayout(head);
     m_mem = monoView();
     v->addWidget(m_mem, 1);
 
@@ -672,80 +691,16 @@ QWidget *DebuggerWindow::buildDisasm()
     return w;
 }
 
-/* A page of video memory decoded to pixels: what the CPU sees there now,
- * which is not necessarily what is on screen. */
+/* The Video tab: the screen and video memory decoded, with an inspector
+ * (apple2vidtab.h does the deciding; VideoTab.cpp is its widgets). */
 QWidget *DebuggerWindow::buildVideo()
 {
-    auto *w = new QWidget;
-    auto *v = new QVBoxLayout(w);
-    m_viewFb.assign((size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT, 0);
-    auto *row = new QHBoxLayout;
-    m_viewPick = new QComboBox;
-    /* the page list comes from the engine, so a view added there shows up
-     * here with no edit */
-    for (int i = 0; apple2debug_view_name(i); i++) m_viewPick->addItem(QString::fromUtf8(apple2debug_view_name(i)));
-    connect(m_viewPick, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
-        viewUnpin();                    /* the pin was a byte of the old page */
-        refreshVideo();
+    m_video = new VideoTab(m_session);
+    connect(m_video, &VideoTab::showInMemory, this, [this](int bank, int lo, int hi) {
+        revealMemory();
+        showInMemory((uint16_t)lo, (uint16_t)hi, bank);
     });
-    row->addWidget(new QLabel(QStringLiteral("Page")));
-    row->addWidget(m_viewPick);
-    m_viewNote = new QLabel;
-    m_viewNote->setStyleSheet(kGray);
-    row->addWidget(m_viewNote, 1);
-    v->addLayout(row);
-    m_viewPic = new QLabel;
-    m_viewPic->setFixedSize(APPLE2VIEW_WIDTH * 2, APPLE2VIEW_HEIGHT * 2);
-    m_viewPic->setStyleSheet(QStringLiteral("background: black;"));
-    m_viewPic->setMouseTracking(true);
-    m_viewPic->installEventFilter(this);
-    auto *body = new QHBoxLayout;
-    body->addWidget(m_viewPic, 0, Qt::AlignLeft | Qt::AlignTop);
-    auto *side = new QVBoxLayout;
-    const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-    m_viewHoverTxt = new QLabel(QStringLiteral("Hover the picture to inspect a byte"));
-    m_viewHoverTxt->setFont(mono);
-    m_viewHoverTxt->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_viewPinTxt = new QLabel;
-    m_viewPinTxt->setFont(mono);
-    m_viewPinTxt->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_viewMsg = new QLabel;
-    m_viewMsg->setStyleSheet(kGray);
-    auto *btns = new QHBoxLayout;
-    auto *goMem = new QPushButton(QStringLiteral("Show in Memory"));
-    goMem->setToolTip(QStringLiteral("Show the pinned byte (else the one under the mouse) in the Memory tab"));
-    connect(goMem, &QPushButton::clicked, this, [this] {
-        if (!m_viewPinned && !m_viewHover) {
-            m_viewMsg->setText(QStringLiteral("Click a byte in the picture first"));
-            return;
-        }
-        const uint16_t a = m_viewPinned ? m_viewPinPx.addr : m_viewHoverPx.addr;
-        if (m_popped[TAB_MEMORY]) m_popped[TAB_MEMORY]->activateWindow();
-        else m_tabs->setCurrentWidget(m_pages[TAB_MEMORY]);
-        showInMemory(a, a);
-    });
-    auto *unpin = new QPushButton(QStringLiteral("Unpin"));
-    unpin->setToolTip(QStringLiteral("Drop the pinned byte"));
-    connect(unpin, &QPushButton::clicked, this, [this] { viewUnpin(); });
-    btns->addWidget(goMem);
-    btns->addWidget(unpin);
-    btns->addStretch(1);
-    side->addWidget(new QLabel(QStringLiteral("Click pins a byte, double-click breaks on writes to it")));
-    side->addWidget(m_viewHoverTxt);
-    side->addWidget(m_viewPinTxt);
-    side->addWidget(m_viewMsg);
-    side->addLayout(btns);
-    side->addStretch(1);
-    body->addLayout(side, 1);
-    v->addLayout(body);
-    v->addWidget(hintLabel(QStringLiteral("A memory inspector: it decodes the page the CPU sees now, which is how "
-                                          "to find the buffer a program draws into before it flips to it.")));
-    v->addStretch(1);
-    /* the page can outgrow the window on a short screen: it scrolls */
-    auto *scroll = new QScrollArea;
-    scroll->setWidgetResizable(true);
-    scroll->setWidget(w);
-    return scroll;
+    return m_video;
 }
 
 QWidget *DebuggerWindow::buildBreaks()
@@ -1032,7 +987,21 @@ void DebuggerWindow::refreshMem()
 {
     static uint8_t mem[MEM_ROWS * 16];
     memset(mem, 0, sizeof mem);
-    apple2debug_read(m_dbg, (uint16_t)m_memTop, mem, (int)sizeof mem);
+    const int bank = memBank();
+    /* a bank that is not there (no aux RAM on a ][+) is greyed out in the chooser */
+    auto *model = qobject_cast<QStandardItemModel *>(m_memBank->model());
+    for (int b = 0; model && b < APPLE2_BANK_COUNT; ++b)
+        if (QStandardItem *it = model->item(b)) it->setEnabled(apple2debug_bank_valid(m_dbg, b) != 0);
+    if (bank == APPLE2_BANK_CURRENT) {
+        apple2debug_read(m_dbg, (uint16_t)m_memTop, mem, (int)sizeof mem);
+        m_memTitle->setText(QStringLiteral("Memory (as the CPU sees it through the bank map)"));
+    } else {
+        apple2debug_read_bank(m_dbg, bank, (uint16_t)m_memTop, mem, (int)sizeof mem);
+        uint16_t blo = 0, bhi = 0xFFFF;
+        apple2debug_bank_range(m_dbg, bank, &blo, &bhi);
+        m_memTitle->setText(QStringLiteral("Memory: %1 ($%2-$%3)")
+                                .arg(QString::fromUtf8(apple2debug_bank_name(bank)), hx(blo, 4), hx(bhi, 4)));
+    }
     QString t;
     t.reserve(MEM_ROWS * 80);
     t += QStringLiteral("       ");
@@ -1175,106 +1144,11 @@ void DebuggerWindow::refreshDisasm()
     m_disasm->setExtraSelections(sel);
 }
 
-/* Decode whichever video page the combo names. This shows a PAGE, not what
- * the machine is currently displaying -- which is the point: it is how you
- * see the buffer a program is drawing into before it flips to it. */
-void DebuggerWindow::refreshVideo()
+/* The Video tab takes its own snapshot; a stopped machine redraws only when
+ * the core says something changed. */
+void DebuggerWindow::refreshVideo(bool force)
 {
-    const int sel = m_viewPick->currentIndex();
-    if (sel < 0) return;
-    if (apple2debug_render_view(m_dbg, (apple2debug_view)sel, m_viewFb.data()) != 0) return;
-    m_viewNote->setText(QStringLiteral("at $%1").arg(hx(apple2debug_view_base((apple2debug_view)sel), 4)));
-    /* Format_RGB32 ignores the top octet, so the engine's pixels need no
-     * conversion; copy() because the QImage is a view over m_viewFb */
-    const QImage img((const uchar *)m_viewFb.data(), APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT, APPLE2VIEW_WIDTH * 4,
-                     QImage::Format_RGB32);
-    /* nearest-neighbour on purpose: this is a pixel inspector, so smoothing
-     * would hide what is being inspected. Cached unmarked, so a hover only
-     * redraws the outlines. */
-    m_viewImg = img.scaled(APPLE2VIEW_WIDTH * 2, APPLE2VIEW_HEIGHT * 2, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-    if (m_viewPinned) {
-        /* the pinned byte, live; its value is the point */
-        if (apple2debug_view_inspect(m_dbg, (apple2debug_view)sel, m_viewPinX, m_viewPinY, &m_viewPinPx) != 0 ||
-            !m_viewPinPx.valid)
-            m_viewPinned = false;
-    }
-    if (m_viewHover &&
-        (apple2debug_view_inspect(m_dbg, (apple2debug_view)sel, m_viewHoverPx.rx, m_viewHoverPx.ry, &m_viewHoverPx) != 0 ||
-         !m_viewHoverPx.valid))
-        m_viewHover = false;
-    viewDraw();
-}
-
-/* The cached picture with the white hover cell and the yellow pinned one
- * outlined, and the two texts beside it. */
-void DebuggerWindow::viewDraw()
-{
-    if (m_viewImg.isNull()) return;
-    QImage img = m_viewImg.copy();
-    QPainter p(&img);
-    auto box = [&p](const apple2debug_pixel &px, const QColor &c) {
-        p.setPen(c);
-        p.drawRect(px.rx * 2, px.ry * 2, px.rw * 2 - 1, px.rh * 2 - 1);
-    };
-    if (m_viewHover) box(m_viewHoverPx, Qt::white);
-    if (m_viewPinned) box(m_viewPinPx, Qt::yellow);
-    p.end();
-    m_viewPic->setPixmap(QPixmap::fromImage(img));
-    m_viewHoverTxt->setText(m_viewHover ? QStringLiteral("Hover\n") + QString::fromUtf8(m_viewHoverPx.text)
-                                        : QStringLiteral("Hover the picture to inspect a byte"));
-    m_viewPinTxt->setText(m_viewPinned ? QStringLiteral("Pinned\n") + QString::fromUtf8(m_viewPinPx.text) : QString());
-}
-
-void DebuggerWindow::viewHover(int x, int y)
-{
-    const int sel = m_viewPick->currentIndex();
-    m_viewHover = sel >= 0 && x >= 0 && y >= 0 &&
-                  apple2debug_view_inspect(m_dbg, (apple2debug_view)sel, x, y, &m_viewHoverPx) == 0 && m_viewHoverPx.valid;
-    viewDraw();
-}
-
-/* Pins the byte under (x, y); the same cell again unpins. */
-void DebuggerWindow::viewPin(int x, int y)
-{
-    const int sel = m_viewPick->currentIndex();
-    apple2debug_pixel px = {};
-    if (sel < 0 || apple2debug_view_inspect(m_dbg, (apple2debug_view)sel, x, y, &px) != 0 || !px.valid) return;
-    if (m_viewPinned && m_viewPinPx.rx == px.rx && m_viewPinPx.ry == px.ry) {
-        viewUnpin();
-        return;
-    }
-    m_viewPinned = true;
-    m_viewPinPx = px;
-    m_viewPinX = x;
-    m_viewPinY = y;
-    viewDraw();
-}
-
-void DebuggerWindow::viewUnpin()
-{
-    m_viewPinned = false;
-    if (m_viewPinTxt) viewDraw();
-}
-
-/* Double-click: stop on writes to that byte, unless one is already set. */
-void DebuggerWindow::viewBreak(int x, int y)
-{
-    const int sel = m_viewPick->currentIndex();
-    apple2debug_pixel px = {};
-    if (sel < 0 || apple2debug_view_inspect(m_dbg, (apple2debug_view)sel, x, y, &px) != 0 || !px.valid) return;
-    static apple2debug_breakpoint bps[BP_MAX];
-    const int n = apple2debug_breakpoint_list(m_dbg, bps, BP_MAX);
-    for (int i = 0; i < n; i++) {
-        if (bps[i].enabled && (bps[i].type & APPLE2DEBUG_BP_WRITE) && bps[i].start == px.addr && bps[i].end == px.addr) {
-            m_viewMsg->setText(QStringLiteral("Break on writes to $%1").arg(hx(px.addr, 4)));
-            return;
-        }
-    }
-    char err[160] = "";
-    if (apple2debug_breakpoint_add(m_dbg, APPLE2DEBUG_BP_WRITE, px.addr, px.addr, "", err, sizeof err) < 0)
-        m_viewMsg->setText(QString::fromUtf8(err));
-    else
-        m_viewMsg->setText(QStringLiteral("Break on writes to $%1").arg(hx(px.addr, 4)));
+    m_video->refresh(force);
 }
 
 void DebuggerWindow::refreshBps()
@@ -1434,13 +1308,13 @@ void DebuggerWindow::refreshWatches(bool force)
             mem->setToolTip(QStringLiteral("Show it in the Memory tab"));
             connect(mem, &QPushButton::clicked, this, [this, i] {
                 uint16_t lo, hi;
-                if (!apple2watch_range(m_dbg, i, &lo, &hi)) {
+                int bank = APPLE2_BANK_CURRENT;
+                if (!apple2watch_range_bank(m_dbg, i, &bank, &lo, &hi)) {
                     message(QStringLiteral("That watch does not resolve yet"));
                     return;
                 }
-                if (m_popped[TAB_MEMORY]) m_popped[TAB_MEMORY]->activateWindow();
-                else m_tabs->setCurrentWidget(m_pages[TAB_MEMORY]);
-                showInMemory(lo, hi);
+                revealMemory();
+                showInMemory(lo, hi, bank == APPLE2_BANK_CURRENT ? -1 : bank);
             });
             auto *brk = new QPushButton(QStringLiteral("Break on change"));
             brk->setToolTip(QStringLiteral("Stop after a write that alters it"));
@@ -1561,7 +1435,7 @@ void DebuggerWindow::refreshPage(int page, bool live)
     switch (page) {
     case TAB_DISASM: if (!live) refreshDisasm(); break;
     case TAB_MEMORY: refreshMem(); break;
-    case TAB_VIDEO: refreshVideo(); break;
+    case TAB_VIDEO: refreshVideo(std::exchange(m_videoForce, false)); break;
     case TAB_BREAKS: refreshBps(); break;
     case TAB_WATCHES: refreshWatches(false); break;
     case TAB_SLOTS: refreshSlots(); break;
@@ -1661,6 +1535,8 @@ void DebuggerWindow::tick()
         refreshPage(currentTab(), true);
         for (int t = 0; t < TAB_COUNT; ++t)
             if (m_popped[t]) refreshPage(t, true);
+    } else if (!stopped && tabVisible(TAB_VIDEO)) {
+        refreshVideo(false);            /* the picture moves faster than the other tabs */
     }
 }
 
@@ -1853,9 +1729,31 @@ void DebuggerWindow::setFlag(int id, bool on)
     resync();
 }
 
-/* Shows a range in the dump, from just above it, marked and scrolled to. */
-void DebuggerWindow::showInMemory(uint16_t lo, uint16_t hi)
+int DebuggerWindow::memBank() const
 {
+    const int b = m_memBank ? m_memBank->currentIndex() : 0;
+    return b >= 0 && b < APPLE2_BANK_COUNT ? b : APPLE2_BANK_CURRENT;
+}
+
+void DebuggerWindow::setMemBank(int bank)
+{
+    if (bank >= 0 && bank < APPLE2_BANK_COUNT && bank != memBank()) {
+        const QSignalBlocker block(m_memBank);      /* the caller marks and redraws */
+        m_memBank->setCurrentIndex(bank);
+    }
+}
+
+/* The Memory tab in front, wherever it lives now. */
+void DebuggerWindow::revealMemory()
+{
+    if (m_popped[TAB_MEMORY]) m_popped[TAB_MEMORY]->activateWindow();
+    else m_tabs->setCurrentWidget(m_pages[TAB_MEMORY]);
+}
+
+/* Shows a range in the dump, from just above it, marked and scrolled to. */
+void DebuggerWindow::showInMemory(uint16_t lo, uint16_t hi, int bank)
+{
+    if (bank >= 0) setMemBank(bank);
     m_hl = true;
     m_hlLo = lo;
     m_hlHi = hi;
@@ -1875,15 +1773,17 @@ void DebuggerWindow::memGoto()
     if (text.isEmpty()) return;
     uint16_t lo, hi;
     long a;
+    int bank = APPLE2_BANK_CURRENT;
     if (hexOnly.match(text).hasMatch() && addressOf(text, &a)) {
         lo = hi = (uint16_t)a;
-    } else if (!apple2sym_parse_range(m_dbg, text.toUtf8().constData(), &lo, &hi)) {
+    } else if (!apple2sym_parse_range_bank(m_dbg, text.toUtf8().constData(), &bank, &lo, &hi)) {
         m_hl = false;
         refreshMem();
         message(QStringLiteral("Not an address, label or range: %1").arg(text));
         return;
     }
-    showInMemory(lo, hi);
+    /* a prefix (aux:$0400) switches the chooser; without one it stays */
+    showInMemory(lo, hi, bank == APPLE2_BANK_CURRENT ? -1 : bank);
 }
 
 /* Find Next / Previous from the marked range (or the top of the dump); the
@@ -1899,7 +1799,32 @@ void DebuggerWindow::memSearch(bool backward)
     }
     uint16_t from = (uint16_t)m_memTop, found = 0;
     if (m_hl) from = backward ? m_hlLo : (uint16_t)(m_hlLo + 1);
-    const int r = apple2debug_search_next(m_dbg, pat, n, mask, flags, from, backward ? 1 : 0, &found);
+    int r;
+    const int bank = memBank();
+    if (bank == APPLE2_BANK_CURRENT) {
+        r = apple2debug_search_next(m_dbg, pat, n, mask, flags, from, backward ? 1 : 0, &found);
+    } else {
+        /* the bank has no "next": list every hit, then take the one after (before) `from`, wrapping once */
+        static uint16_t hits[0x10000];
+        uint16_t blo = 0, bhi = 0xFFFF;
+        apple2debug_bank_range(m_dbg, bank, &blo, &bhi);
+        const int cnt = apple2debug_search_bank(m_dbg, bank, pat, n, mask, flags, blo, bhi, hits, 0x10000);
+        if (cnt < 0) {
+            r = -1;
+        } else if (cnt == 0) {
+            r = 0;
+        } else {
+            r = 1;
+            found = backward ? hits[cnt - 1] : hits[0];             /* the wrap */
+            if (backward) {
+                for (int i = cnt - 1; i >= 0; --i)
+                    if (hits[i] < from) { found = hits[i]; break; }
+            } else {
+                for (int i = 0; i < cnt; ++i)
+                    if (hits[i] >= from) { found = hits[i]; break; }
+            }
+        }
+    }
     if (r < 0) {
         m_srchNote->setText(QStringLiteral("Stop the machine first"));
         message(QStringLiteral("Stop the machine first"));
@@ -1908,7 +1833,7 @@ void DebuggerWindow::memSearch(bool backward)
         message(QStringLiteral("Not found"));
     } else {
         m_srchNote->setText(QStringLiteral("Found at $%1").arg(hx(found, 4)));
-        showInMemory(found, (uint16_t)(found + n - 1));
+        showInMemory(found, (uint16_t)(found + n - 1), -1);
     }
 }
 
@@ -1921,7 +1846,8 @@ void DebuggerWindow::memWrite()
         message(QStringLiteral("The value is a byte ($00-$FF)"));
         return;
     }
-    apple2debug_write(m_dbg, (uint16_t)a, (uint8_t)v);
+    if (memBank() == APPLE2_BANK_CURRENT) apple2debug_write(m_dbg, (uint16_t)a, (uint8_t)v);
+    else apple2debug_write_bank(m_dbg, memBank(), (uint16_t)a, (uint8_t)v);
     resync();
 }
 
@@ -2041,6 +1967,7 @@ void DebuggerWindow::popOut(int tab)
     new QShortcut(QKeySequence(Qt::Key_F8), win, [this] { stepAnd([this] { apple2debug_step_over(m_dbg); }); });
     new QShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F8), win, [this] { stepAnd([this] { apple2debug_step_out(m_dbg); }); });
     if (isVisible()) win->show();
+    if (tab == TAB_VIDEO) m_videoForce = true;
     if (tab == TAB_HISTORY) m_hSeen[1] = -1;
     refreshPage(tab, false);
 }
@@ -2057,6 +1984,7 @@ void DebuggerWindow::dock(int tab)
     page->setParent(nullptr);
     m_tabs->insertTab(pos, page, QString::fromUtf8(kTabs[tab].label).replace(QLatin1Char('&'), QLatin1String("&&")));
     m_tabs->setCurrentIndex(pos);
+    if (tab == TAB_VIDEO) m_videoForce = true;
     if (tab == TAB_HISTORY) m_hSeen[1] = -1;
     refreshPage(tab, false);
 }
@@ -2077,29 +2005,6 @@ bool DebuggerWindow::eventFilter(QObject *obj, QEvent *e)
             else if (ke->key() == Qt::Key_Down && m_historyPos < m_history.size()) ++m_historyPos;
             m_conIn->setText(m_historyPos < m_history.size() ? m_history.at(m_historyPos) : QString());
             return true;
-        }
-    }
-    if (m_viewPic && obj == m_viewPic) {
-        /* the picture is shown at 2x: widget pixels halve into picture ones */
-        const auto at = [](QMouseEvent *me) { return me->position().toPoint() / 2; };
-        switch (e->type()) {
-        case QEvent::MouseMove: {
-            const QPoint pt = at(static_cast<QMouseEvent *>(e));
-            viewHover(pt.x(), pt.y());
-            return true;
-        }
-        case QEvent::Leave: viewHover(-1, -1); return true;
-        case QEvent::MouseButtonPress: {
-            auto *me = static_cast<QMouseEvent *>(e);
-            if (me->button() == Qt::LeftButton) viewPin(at(me).x(), at(me).y());
-            return true;
-        }
-        case QEvent::MouseButtonDblClick: {
-            auto *me = static_cast<QMouseEvent *>(e);
-            if (me->button() == Qt::LeftButton) viewBreak(at(me).x(), at(me).y());
-            return true;
-        }
-        default: break;
         }
     }
     if (m_disasm && obj == m_disasm->viewport()) {
