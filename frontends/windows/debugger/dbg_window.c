@@ -64,7 +64,7 @@
 #include "../help/help_window.h"
 
 /* The Apple II accent (a rainbow-logo green) with white text on it. */
-#define APPLE2_ACCENT_COLORREF RGB(46, 125, 50)
+#define APPLE2_ACCENT_COLORREF RGB(244, 67, 54)
 #define APPLE2_ACCENT_TEXT RGB(255, 255, 255)
 
 static HBRUSH apple2_accent_brush(void)
@@ -77,7 +77,7 @@ static HBRUSH apple2_accent_brush(void)
 static HBRUSH apple2_accent_hot_brush(void)
 {
     static HBRUSH brush;
-    if (!brush) brush = CreateSolidBrush(RGB(46 + (255 - 46) / 5, 125 + (255 - 125) / 5, 50 + (255 - 50) / 5));
+    if (!brush) brush = CreateSolidBrush(RGB(244 + (255 - 244) / 5, 67 + (255 - 67) / 5, 54 + (255 - 54) / 5));
     return brush;
 }
 
@@ -2009,7 +2009,7 @@ static void paint_disasm(debugger *d, HWND hwnd, HDC dc)
         }
         if (l->has_breakpoint) {
             const int size = d->line_h - S(d, 6) > 4 ? d->line_h - S(d, 6) : 4;
-            HGDIOBJ oldb = SelectObject(dc, l->breakpoint_enabled ? d->bp_on : d->bp_off);
+            HGDIOBJ oldb = SelectObject(dc, l->breakpoint_enabled ? (is_pc ? GetStockObject(WHITE_BRUSH) : d->bp_on) : d->bp_off);
             HGDIOBJ oldp = SelectObject(dc, GetStockObject(is_pc ? BLACK_PEN : NULL_PEN));
             Ellipse(dc, S(d, 4), y + (d->line_h - size) / 2, S(d, 4) + size + 1, y + (d->line_h - size) / 2 + size + 1);
             SelectObject(dc, oldp);

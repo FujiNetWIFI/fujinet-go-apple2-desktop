@@ -393,12 +393,12 @@ private slots:
         /* the PC's bar is the block's own background (an extra selection
          * would paint over the breakpoint dot) */
         QCOMPARE(v->document()->findBlockByNumber(pcLine).blockFormat().background().color(),
-                 QColor(0x2c, 0x7a, 0x4b));
+                 QColor(0xf4, 0x43, 0x36));
         for (const auto &s : v->extraSelections())
             QVERIFY(!s.format.boolProperty(QTextFormat::FullWidthSelection));
 
         /* a breakpoint's dot: filled and red, hollow and grey when disabled,
-         * and still red on the PC's own line */
+         * and white on the PC's own line (its bar is nearly the same red) */
         apple2debug_breakpoint_toggle(m_d, 0x0302);
         QTRY_VERIFY_WITH_TIMEOUT(v->document()->findBlockByNumber(lineOf(v, 0x0302)).text().startsWith(
                                      QStringLiteral("●")), 2000);
@@ -415,7 +415,7 @@ private slots:
         apple2debug_breakpoint_toggle(m_d, 0x0300);
         QTRY_VERIFY_WITH_TIMEOUT(v->document()->findBlockByNumber(lineOf(v, 0x0300)).text().startsWith(
                                      QStringLiteral("●")), 2000);
-        QCOMPARE(dotColor(lineOf(v, 0x0300)), QColor(0xe0, 0x1b, 0x24));
+        QCOMPARE(dotColor(lineOf(v, 0x0300)), QColor(Qt::white));
         apple2debug_breakpoint_toggle(m_d, 0x0300);
         apple2debug_breakpoint b;
         QCOMPARE(apple2debug_breakpoint_list(m_d, &b, 1), 1);
@@ -565,7 +565,7 @@ private slots:
         /* the bytes Go to found are marked in the accent colour, white ink */
         bool marked = false;
         for (const auto &s : mem->extraSelections())
-            marked |= s.format.background().color() == QColor(0x2c, 0x7a, 0x4b) &&
+            marked |= s.format.background().color() == QColor(0xf4, 0x43, 0x36) &&
                       s.format.foreground().color() == QColor(Qt::white);
         QVERIFY(marked);
         /* edits need a stopped machine */

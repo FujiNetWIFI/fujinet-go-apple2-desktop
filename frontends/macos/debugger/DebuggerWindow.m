@@ -91,10 +91,10 @@
 
 static DebuggerWindow *g_debugger;
 
-/* The accent (a dark green), white text on it. */
+/* The accent (the icon background, #F44336), white text on it. */
 static NSColor *a2Accent(void)
 {
-    return [NSColor colorWithSRGBRed:0.16 green:0.45 blue:0.22 alpha:1.0];
+    return [NSColor colorWithSRGBRed:244.0/255.0 green:67.0/255.0 blue:54.0/255.0 alpha:1.0];
 }
 
 /* Toggled-on look for a push button: accent bezel and a white title. Off

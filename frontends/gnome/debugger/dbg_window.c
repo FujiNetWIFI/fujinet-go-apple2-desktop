@@ -415,7 +415,7 @@ static GtkWidget *padded(GtkWidget *w)
 static void accent_tag(GtkTextView *view, const char *name)
 {
     gtk_text_buffer_create_tag(gtk_text_view_get_buffer(view), name,
-                               "paragraph-background", "#3b7d23", "foreground", "#ffffff", NULL);
+                               "paragraph-background", "#f44336", "foreground", "#ffffff", NULL);
 }
 
 /* Messages from Load Symbols and Save land in the console's transcript and,
@@ -590,15 +590,17 @@ static void refresh_disasm(DbgWin *w)
         gtk_text_buffer_get_iter_at_line(b, &e, pc_buf + 1);
         gtk_text_buffer_apply_tag_by_name(b, "pc", &s, &e);
     }
-    /* the gutter marker: red while the breakpoint is enabled, grey off (it
-     * keeps its colour on the PC line) */
+    /* the gutter marker: red while the breakpoint is enabled, grey off (white
+     * on the PC line, whose bar is nearly the same red) */
     for (i = 0, line = 0; i < n; i++) {
         if (lines[i].label[0]) line++;
         if (lines[i].has_breakpoint) {
             gtk_text_buffer_get_iter_at_line(b, &s, line);
             e = s;
             gtk_text_iter_forward_char(&e);
-            gtk_text_buffer_apply_tag_by_name(b, lines[i].breakpoint_enabled ? "bp_on" : "bp_off",
+            /* the bar is nearly the dot's red, so on the PC line the dot is white */
+            gtk_text_buffer_apply_tag_by_name(b, !lines[i].breakpoint_enabled ? "bp_off"
+                                                 : line == pc_buf ? "bp_pc" : "bp_on",
                                               &s, &e);
         }
         line++;
@@ -1123,11 +1125,11 @@ static void install_css(void)
     done = TRUE;
     css = gtk_css_provider_new();
     gtk_css_provider_load_from_string(css,
-        "button.apple2-accent { background-image: none; background-color: #3b7d23;"
+        "button.apple2-accent { background-image: none; background-color: #f44336;"
         " color: #fff; }"
         "button.apple2-toggle:checked, togglebutton.apple2-toggle:checked {"
-        " background-image: none; background-color: #3b7d23; color: #fff; }"
-        "label.apple2-accent-text { color: #3b7d23; }");
+        " background-image: none; background-color: #f44336; color: #fff; }"
+        "label.apple2-accent-text { color: #f44336; }");
     gtk_style_context_add_provider_for_display(
         gdk_display_get_default(), GTK_STYLE_PROVIDER(css),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -2084,7 +2086,7 @@ static GtkWidget *build_memory(DbgWin *w)
     gtk_box_append(GTK_BOX(box), mem);
     /* the highlight covers a few bytes, not a paragraph */
     gtk_text_buffer_create_tag(gtk_text_view_get_buffer(w->mem_view), "mark",
-                               "background", "#3b7d23", "foreground", "#ffffff", NULL);
+                               "background", "#f44336", "foreground", "#ffffff", NULL);
     w->mem_hl = FALSE;
     return padded(box);
 }
@@ -2106,6 +2108,7 @@ static GtkWidget *build_disasm(DbgWin *w)
     accent_tag(w->disasm, "pc");
     gtk_text_buffer_create_tag(b, "bp_on", "foreground", "#e01b24", NULL);
     gtk_text_buffer_create_tag(b, "bp_off", "foreground", "#8a8a8a", NULL);
+    gtk_text_buffer_create_tag(b, "bp_pc", "foreground", "#ffffff", NULL);
 
     w->follow_pc = GTK_CHECK_BUTTON(gtk_check_button_new_with_label("Follow PC"));
     gtk_check_button_set_active(w->follow_pc, TRUE);

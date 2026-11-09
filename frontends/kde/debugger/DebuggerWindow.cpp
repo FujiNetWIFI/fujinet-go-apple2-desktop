@@ -111,11 +111,11 @@ const struct { const char *name; int id; } kFlags[7] = {
 
 const QString kGray = QStringLiteral("color: gray;");
 
-/* The PC's line, a marked memory row and the Run button: the Apple II's
- * green, white ink. */
+/* The PC's line, a marked memory row and the Run button: the icon's red,
+ * white ink. */
 QColor accentColor()
 {
-    return QColor(0x2c, 0x7a, 0x4b);
+    return QColor(0xf4, 0x43, 0x36);
 }
 
 QTextCharFormat accentFormat()
@@ -1099,7 +1099,7 @@ void DebuggerWindow::refreshDisasm()
         if (lines[i].has_breakpoint) {
             QTextCharFormat f;
             if (lines[i].breakpoint_enabled) {
-                f.setForeground(QColor(0xe0, 0x1b, 0x24));
+                f.setForeground(i == pcLine ? QColor(Qt::white) : QColor(0xe0, 0x1b, 0x24));
                 f.setFontWeight(QFont::Bold);
             } else {
                 f.setForeground(QColor(0x9a, 0x99, 0x96));
