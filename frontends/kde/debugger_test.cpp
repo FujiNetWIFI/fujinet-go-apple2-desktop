@@ -78,6 +78,18 @@ int pcOf(apple2debug *d)
 
 } // namespace
 
+/* A pointer move on the video picture, sent straight to the widget. Before
+ * Qt 6.8 QTest::mouseMove did not always deliver the move to a widget the
+ * pointer had not been "over", so hover assertions were intermittent; the
+ * window's event filter sees this exactly as it sees a real move. */
+static void movePicture(QWidget *pic, const QPoint &at)
+{
+    QMouseEvent ev(QEvent::MouseMove, QPointF(at), QPointF(pic->mapToGlobal(at)), Qt::NoButton,
+                   Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(pic, &ev);
+    QCoreApplication::processEvents();
+}
+
 /* A click on the video picture that cannot be read as the second half of a
  * double-click. Qt Test stamps its events with synthetic times, and before Qt
  * 6.8 two clicks on the same spot a few synthetic milliseconds apart (with
@@ -1107,10 +1119,10 @@ private slots:
         QVERIFY(pixel->text().contains(QLatin1String("Move over")));
         const QPoint at(3 * 14 * 2 + 12, 2 * 8 * 2 + 6);        /* inside the cell, at 2x */
         const QPoint away(30 * 14 * 2 + 12, 10 * 8 * 2 + 6);
-        QTest::mouseMove(pic, at);
+        movePicture(pic, at);
         QTRY_VERIFY_WITH_TIMEOUT(pixel->text().contains(QLatin1String("0503")), 2000);
         clickPicture(pic, at);
-        QTest::mouseMove(pic, away);                    /* the pin stays when the pointer leaves */
+        movePicture(pic, away);                    /* the pin stays when the pointer leaves */
         QVERIFY(pixel->text().contains(QLatin1String("0503")));
         /* marks: the pin is yellow around the cell (2x: x = 84, y = 32 .. 48) */
         QImage img = pic->grab().toImage();
@@ -1119,7 +1131,7 @@ private slots:
         /* the hover mark follows the pointer: white around the new cell (x = 840) */
         QTRY_VERIFY_WITH_TIMEOUT(hasColour(pic->grab().toImage(), 838, 842, 100, 255, 255, 255), 1000);
         clickPicture(pic, at);     /* the same spot unpins */
-        QTest::mouseMove(pic, away);
+        movePicture(pic, away);
         QTRY_VERIFY_WITH_TIMEOUT(!pixel->text().contains(QLatin1String("0503")), 1000);
         QVERIFY(!hasColour(pic->grab().toImage(), 82, 86, 40, 255, 217, 26));
         clickPicture(pic, at);
@@ -1162,7 +1174,7 @@ private slots:
 
         /* Show in Memory: the Memory tab, on the byte, in main RAM */
         QTest::mouseClick(unpin, Qt::LeftButton);
-        QTest::mouseMove(pic, away);
+        movePicture(pic, away);
         clickPicture(pic, at);                 /* pin $0503 again */
         QTRY_VERIFY_WITH_TIMEOUT(pixel->text().contains(QLatin1String("0503")), 1000);
         QTest::mouseClick(mem, Qt::LeftButton);
@@ -1176,8 +1188,8 @@ private slots:
 
         showVideo();
         QTest::mouseClick(unpin, Qt::LeftButton);
-        QTest::mouseMove(pic, away - QPoint(28, 0));
-        QTest::mouseMove(pic, away);
+        movePicture(pic, away - QPoint(28, 0));
+        movePicture(pic, away);
         /* the pin is gone (the label may still show the hovered byte, which
          * is the same one if the pointer's move was not delivered) */
         QTRY_VERIFY_WITH_TIMEOUT(!hasColour(pic->grab().toImage(), 82, 86, 40, 255, 217, 26), 1000);
