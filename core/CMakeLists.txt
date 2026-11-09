@@ -215,6 +215,7 @@ add_library(apple2session STATIC
   debugger/memtools.c
   debugger/sptrace.c
   debugger/a2video.c
+  debugger/vidtab.c
 )
 
 target_include_directories(apple2session
@@ -289,12 +290,19 @@ target_link_libraries(debug_seam_test apple2session)
 add_executable(debug_engine_test tests/debug_engine_test.c)
 target_link_libraries(debug_engine_test apple2session)
 
+add_executable(bank_test tests/bank_test.c)
+target_link_libraries(bank_test apple2session)
+target_include_directories(bank_test PRIVATE debugger)
+
 add_executable(memtools_test tests/memtools_test.c)
 target_link_libraries(memtools_test apple2session)
 target_include_directories(memtools_test PRIVATE debugger)
 
 add_executable(video_test tests/video_test.c)
 target_link_libraries(video_test apple2session)
+
+add_executable(vidtab_test tests/vidtab_test.c)
+target_link_libraries(vidtab_test apple2session)
 
 add_executable(dasm_test tests/dasm_test.c)
 target_link_libraries(dasm_test apple2session)
@@ -319,7 +327,10 @@ add_test(NAME debug_seam_plus COMMAND debug_seam_test "Apple ][+")
 add_test(NAME debug_engine COMMAND debug_engine_test)
 add_test(NAME video COMMAND video_test)
 add_test(NAME memtools COMMAND memtools_test)
-set_tests_properties(boot_smoke debug_seam debug_seam_e debug_seam_plus debug_engine video
+add_test(NAME vidtab COMMAND vidtab_test)
+add_test(NAME banks COMMAND bank_test)
+add_test(NAME banks_plus COMMAND bank_test "Apple ][+")
+set_tests_properties(boot_smoke debug_seam debug_seam_e debug_seam_plus debug_engine video vidtab banks banks_plus
                      PROPERTIES SKIP_RETURN_CODE 77)
 
 # Makes the COMPLIANCE.md claim checkable: a ROM-less build must not have any

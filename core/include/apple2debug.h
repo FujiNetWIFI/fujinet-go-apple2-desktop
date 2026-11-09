@@ -397,6 +397,55 @@ int  apple2debug_search_next(apple2debug *d, const uint8_t *pat, int n,
                              uint8_t mask, int flags, uint16_t from,
                              int backward, uint16_t *found);
 
+/* ---- memory banks (read/write a bank without flipping soft switches) ------- */
+/* Implemented through AppleWin's own pointers (main, aux, language card, ROM),
+ * never the soft-switch handlers; works whether or not the flat memory cache
+ * is valid. NOT covered: RamWorks / Saturn extra banks. */
+typedef enum {
+    APPLE2_BANK_CURRENT = 0,  /* as the CPU sees it now (today's behaviour) */
+    APPLE2_BANK_MAIN,         /* main RAM $0000-$BFFF (the language card has its own banks) */
+    APPLE2_BANK_AUX,          /* aux RAM $0000-$BFFF (//e with an extended 80-col / RamWorks card) */
+    APPLE2_BANK_LC1,          /* language-card RAM bank 1 at $D000-$DFFF */
+    APPLE2_BANK_LC2,          /* language-card RAM bank 2 at $D000-$DFFF */
+    APPLE2_BANK_LCHI,         /* language-card RAM $E000-$FFFF */
+    APPLE2_BANK_ROM,          /* system ROM $D000-$FFFF (internal ROM $C100-$CFFF on a //e too,
+                                 see apple2debug_bank_range) */
+    /* Added later: the aux side's language card RAM (a //e with aux RAM). */
+    APPLE2_BANK_AUXLC1,       /* aux LC RAM bank 1 at $D000-$DFFF (console "alc1:") */
+    APPLE2_BANK_AUXLC2,       /* aux LC RAM bank 2 at $D000-$DFFF ("alc2:") */
+    APPLE2_BANK_AUXLCHI,      /* aux LC RAM $E000-$FFFF ("alchi:") */
+    APPLE2_BANK_COUNT
+} apple2debug_bank;
+/* "As the CPU sees it", "Main RAM", "Aux RAM", "LC RAM bank 1", ... NULL past the end. */
+const char *apple2debug_bank_name(int bank);
+/* The console prefix ("aux", "main", "lc1", "lc2", "lchi", "rom"; "" for CURRENT). */
+const char *apple2debug_bank_prefix(int bank);
+/* The bank a console prefix names at the start of text ("aux:$400" -> APPLE2_BANK_AUX,
+ * *consumed = 4, i.e. including the colon); -1 when there is none. Case-insensitive. */
+int  apple2debug_bank_parse(const char *text, int *consumed);
+/* The addresses the bank covers (CURRENT/ROM-less: 0000-FFFF; MAIN/AUX 0000-BFFF;
+ * LC1/LC2 D000-DFFF; LCHI E000-FFFF; ROM D000-FFFF, C100-FFFF on a //e).
+ * Returns apple2debug_bank_valid. */
+int  apple2debug_bank_range(apple2debug *d, int bank, uint16_t *lo, uint16_t *hi);
+/* 0 when absent (no aux RAM on a ][+, no LC on a ][), 1 present. CURRENT is always 1. */
+int  apple2debug_bank_valid(apple2debug *d, int bank);
+/* Returns n read; 0 if the bank is absent or the session is not running. Bytes
+ * outside what the bank covers (LC1/LC2: outside $D000-$DFFF; LCHI: outside
+ * $E000-$FFFF; ROM: outside $D000-$FFFF and the $C100-$CFFF internal ROM on a //e)
+ * read as 0xFF; n is still returned if at least one byte is covered, else 0. */
+int  apple2debug_read_bank(apple2debug *d, int bank, uint16_t addr, uint8_t *dst, int n);
+/* RAM banks only; ROM and uncovered addresses are ignored. */
+void apple2debug_write_bank(apple2debug *d, int bank, uint16_t addr, uint8_t value);
+/* Like apple2debug_search for one bank; returns the count (-1 while running, 0 absent).
+ * Addresses are the bank's own addresses. */
+int  apple2debug_search_bank(apple2debug *d, int bank, const uint8_t *pat, int n,
+                             uint8_t mask, int flags, uint16_t from, uint16_t to,
+                             uint16_t *out, int max);
+/* Like apple2debug_disassemble but over a bank (the Disassembly tab stays CPU-view).
+ * pc_line is -1 for any bank but CURRENT. */
+int  apple2debug_disassemble_bank(apple2debug *d, int bank, uint16_t addr,
+                                  apple2debug_line *out, int max, int *pc_line);
+
 /* ---- files -------------------------------------------------------------------- */
 /* Save with the path a native file picker supplied. kind: "dis" (the
  * disassembly of $0000-$FFFF as mapped now), "mem" (the 64K the CPU sees),

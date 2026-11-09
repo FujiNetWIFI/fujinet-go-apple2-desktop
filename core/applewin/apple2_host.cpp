@@ -619,3 +619,179 @@ void apple2host_set_joystick_axis(int port, int axis, int16_t value) {
 }
 
 }  // extern "C"
+
+// --- bank seam --------------------------------------------------------------
+#include "../resource/resource.h"
+#include "LanguageCard.h"
+
+namespace {
+
+// Reaches LanguageCardUnit::m_pMemory (protected) through a derived class's
+// member pointer; the derived class is never instantiated.
+struct LcPeek : LanguageCardUnit {
+    static LPBYTE get(LanguageCardUnit* lc) { return lc->*(&LcPeek::m_pMemory); }
+};
+
+LPBYTE lc_main_base() {
+    if (IsAppleIIeOrAbove(GetApple2Type())) {
+        LPBYTE m = MemGetBankPtr(0, false);
+        return m ? m + 0xC000 : nullptr;
+    }
+    LanguageCardUnit* lc = GetCardMgr().GetLanguageCardMgr().GetLanguageCard();
+    return lc ? LcPeek::get(lc) : nullptr;
+}
+
+bool aux_ram_present() {
+    if (!IsAppleIIeOrAbove(GetApple2Type())) return false;
+    const SS_CARDTYPE t = GetCardMgr().QueryAux();
+    return t != CT_Empty && t != CT_80Col;
+}
+
+LPBYTE aux_base() {
+    if (!aux_ram_present()) return nullptr;
+    return MemGetBankPtr(1, false);   // RWpages[0] == memaux until RamWorks switches banks
+}
+
+// ROM image: loaded from the same resources MemInitializeROM() uses.
+struct RomImage {
+    int type = -1;
+    std::vector<uint8_t> cx;    // 4K internal $C000-$CFFF (//e), else empty
+    std::vector<uint8_t> main;  // 12K $D000-$FFFF
+};
+
+const RomImage* rom_image() {
+    static RomImage img;
+    const int ty = static_cast<int>(GetApple2Type());
+    if (img.type == ty) return img.main.empty() ? nullptr : &img;
+    img = RomImage();
+    img.type = ty;
+    WORD id = 0;
+    UINT size = 0;
+    const UINT main_sz = 12 * 1024, cx_sz = 4 * 1024;
+    switch (GetApple2Type()) {
+        case A2TYPE_APPLE2:          id = IDR_APPLE2_ROM;           size = main_sz; break;
+        case A2TYPE_APPLE2PLUS:      id = IDR_APPLE2_PLUS_ROM;      size = main_sz; break;
+        case A2TYPE_APPLE2JPLUS:     id = IDR_APPLE2_JPLUS_ROM;     size = main_sz; break;
+        case A2TYPE_APPLE2E:         id = IDR_APPLE2E_ROM;          size = main_sz + cx_sz; break;
+        case A2TYPE_APPLE2EENHANCED: id = IDR_APPLE2E_ENHANCED_ROM; size = main_sz + cx_sz; break;
+        default: return nullptr;
+    }
+    const BYTE* p = GetFrame().GetResource(id, "ROM", size);
+    if (!p) return nullptr;
+    if (size > main_sz) {
+        img.cx.assign(p, p + cx_sz);
+        p += cx_sz;
+    }
+    img.main.assign(p, p + main_sz);
+    return &img;
+}
+
+// The CPU address a LC store offset appears at (for the 'mem' live-copy test).
+unsigned lc_cpu_addr(unsigned off) {
+    if (off < 0x1000) return 0xD000 + off;
+    if (off < 0x2000) return 0xD000 + (off - 0x1000);
+    return 0xE000 + (off - 0x2000);
+}
+
+// Pointer to one byte of a RAM store, preferring the live 'mem' copy when the
+// CPU's read map shows this very page (AppleWin's MemGetMainPtr rule).
+// *cpu receives the CPU address (for memdirty), or -1.
+LPBYTE ram_ptr(int store, unsigned off, int* cpu) {
+    LPBYTE base = nullptr;
+    unsigned cpuaddr = 0;
+    switch (store) {
+        case APPLE2HOST_BANKSTORE_MAIN: base = MemGetBankPtr(0, false); cpuaddr = off; break;
+        case APPLE2HOST_BANKSTORE_AUX:  base = aux_base(); cpuaddr = off; break;
+        case APPLE2HOST_BANKSTORE_LCMAIN: base = lc_main_base(); cpuaddr = lc_cpu_addr(off); break;
+        case APPLE2HOST_BANKSTORE_LCAUX:
+            base = aux_base();
+            if (base) base += 0xC000;
+            cpuaddr = lc_cpu_addr(off);
+            break;
+        default: break;
+    }
+    *cpu = -1;
+    if (!base) return nullptr;
+    LPBYTE p = base + off;
+    if (GetIsMemCacheValid() && cpuaddr < 0x10000) {
+        const unsigned pg = cpuaddr >> 8;
+        if (memshadow[pg] && memshadow[pg] == p - (cpuaddr & 0xFF)) {
+            *cpu = static_cast<int>(cpuaddr);
+            return mem + cpuaddr;
+        }
+    }
+    return p;
+}
+
+}  // namespace
+
+extern "C" {
+
+int apple2host_bank_present(int store) {
+    if (!mem && !memshadow[0]) return 0;
+    switch (store) {
+        case APPLE2HOST_BANKSTORE_MAIN: return MemGetBankPtr(0, false) != nullptr;
+        case APPLE2HOST_BANKSTORE_AUX:  return aux_base() != nullptr;
+        case APPLE2HOST_BANKSTORE_LCMAIN: return lc_main_base() != nullptr;
+        case APPLE2HOST_BANKSTORE_LCAUX:  return aux_base() != nullptr;
+        case APPLE2HOST_BANKSTORE_ROM:    return rom_image() != nullptr;
+        default: return 0;
+    }
+}
+
+unsigned apple2host_bank_read(int store, unsigned offset, uint8_t* out, unsigned len) {
+    if (!out || store < 0 || store > APPLE2HOST_BANKSTORE_ROM) return 0;
+    if (!apple2host_bank_present(store)) return 0;
+    const unsigned size = APPLE2HOST_BANKSTORE_SIZE(store);
+    if (offset >= size) return 0;
+    if (len > size - offset) len = size - offset;
+    if (store == APPLE2HOST_BANKSTORE_ROM) {
+        const RomImage* r = rom_image();
+        for (unsigned i = 0; i < len; ++i) {
+            const unsigned o = offset + i;
+            out[i] = o >= 0x1000 ? r->main[o - 0x1000]
+                   : (!r->cx.empty() ? r->cx[o] : 0xFF);
+        }
+        return len;
+    }
+    for (unsigned i = 0; i < len; ++i) {
+        int cpu;
+        LPBYTE p = ram_ptr(store, offset + i, &cpu);
+        out[i] = p ? *p : 0xFF;
+    }
+    return len;
+}
+
+unsigned apple2host_bank_write(int store, unsigned offset, const uint8_t* in, unsigned len) {
+    if (!in || store < 0 || store >= APPLE2HOST_BANKSTORE_ROM) return 0;
+    if (!apple2host_bank_present(store)) return 0;
+    const unsigned size = APPLE2HOST_BANKSTORE_SIZE(store);
+    if (offset >= size) return 0;
+    if (len > size - offset) len = size - offset;
+    for (unsigned i = 0; i < len; ++i) {
+        int cpu;
+        LPBYTE p = ram_ptr(store, offset + i, &cpu);
+        if (!p) continue;
+        *p = in[i];
+        if (cpu >= 0) memdirty[cpu >> 8] = 0xFF;
+    }
+    return len;
+}
+
+// --- vidtab seam ---
+unsigned apple2host_read_video_ram(int aux, uint16_t addr, uint8_t* out, unsigned len) {
+    if (!out) return 0;
+    std::memset(out, 0, len);
+    if (aux && !apple2host_has_aux()) return 0;
+    if (!mem && !memshadow[0]) return 0;
+    for (unsigned i = 0; i < len; ++i) {
+        const uint16_t a = static_cast<uint16_t>(addr + i);
+        LPBYTE p = aux ? MemGetAuxPtr(a) : MemGetMainPtr(a);
+        if (!p) return i;
+        out[i] = *p;
+    }
+    return len;
+}
+// --- end vidtab seam ---
+
+}  // extern "C"

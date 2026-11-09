@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "apple2debug.h"
+#include "a2video.h"
 
 #include "font5x7.inc"
 
@@ -78,12 +79,12 @@ static const uint32_t kLoresPalette[16] = {
  * of those rows -- which is why a hi-res page is 8K for 8K of pixels but a
  * text page is 1K for 960 characters: both leave holes. */
 
-static uint16_t text_row_addr(uint16_t base, int row)
+uint16_t a2video_text_row_addr(uint16_t base, int row)
 {
     return (uint16_t)(base + (row & 7) * 0x80 + (row >> 3) * 0x28);
 }
 
-static uint16_t hires_row_addr(uint16_t base, int y)
+uint16_t a2video_hires_row_addr(uint16_t base, int y)
 {
     return (uint16_t)(base + (y & 7) * 0x400 + ((y >> 3) & 7) * 0x80 +
                       (y >> 6) * 0x28);
@@ -125,7 +126,7 @@ static void render_text(apple2debug *d, uint16_t base, uint32_t *dst)
     int row, col, gy, gx;
 
     for (row = 0; row < TEXT_ROWS; row++) {
-        apple2debug_read(d, text_row_addr(base, row), line, TEXT_COLS);
+        apple2debug_read(d, a2video_text_row_addr(base, row), line, TEXT_COLS);
         for (col = 0; col < TEXT_COLS; col++) {
             int inverse = 0;
             const int idx = glyph_index(line[col], &inverse);
@@ -160,7 +161,7 @@ static void render_lores(apple2debug *d, uint16_t base, uint32_t *dst)
     int row, col, half, py, px;
 
     for (row = 0; row < TEXT_ROWS; row++) {
-        apple2debug_read(d, text_row_addr(base, row), line, TEXT_COLS);
+        apple2debug_read(d, a2video_text_row_addr(base, row), line, TEXT_COLS);
         for (col = 0; col < TEXT_COLS; col++) {
             for (half = 0; half < 2; half++) {
                 const uint32_t rgb =
@@ -187,34 +188,148 @@ static void render_lores(apple2debug *d, uint16_t base, uint32_t *dst)
 static void render_hires(apple2debug *d, uint16_t base, uint32_t *dst)
 {
     uint8_t line[TEXT_COLS];
-    uint8_t on[W];      /* is this pixel lit */
-    uint8_t shift[W];   /* the high bit of the byte it came from */
-    int y, col, i, x;
+    int y, x;
 
     for (y = 0; y < H; y++) {
-        apple2debug_read(d, hires_row_addr(base, y), line, TEXT_COLS);
-
-        for (col = 0; col < TEXT_COLS; col++) {
-            const uint8_t b = line[col];
-            for (i = 0; i < 7; i++) {
-                on[col * 7 + i] = (uint8_t)((b >> i) & 1);
-                shift[col * 7 + i] = (uint8_t)((b & 0x80) != 0);
-            }
-        }
-
-        for (x = 0; x < W; x++) {
-            uint32_t *out = dst + (size_t)y * W + x;
-            if (!on[x]) {
-                *out = HR_BLACK;
-            } else if ((x > 0 && on[x - 1]) || (x + 1 < W && on[x + 1])) {
-                *out = HR_WHITE;
-            } else if (x & 1) {
-                *out = shift[x] ? HR_ORANGE : HR_GREEN;
-            } else {
-                *out = shift[x] ? HR_BLUE : HR_VIOLET;
-            }
-        }
+        apple2debug_read(d, a2video_hires_row_addr(base, y), line, TEXT_COLS);
+        for (x = 0; x < W; x++)
+            dst[(size_t)y * W + x] = a2video_hires_pixel(line, x);
     }
+}
+
+
+/* ---- shared with the Video tab (a2video.h) ------------------------------*/
+
+uint32_t a2video_lores_rgb(int n) { return kLoresPalette[n & 15]; }
+
+const char *a2video_lores_name(int n)
+{
+    static const char *const k[16] = {
+        "black", "deep red", "dark blue", "purple", "dark green", "grey",
+        "medium blue", "light blue", "brown", "orange", "grey 2", "pink",
+        "green", "yellow", "aqua", "white",
+    };
+    return k[n & 15];
+}
+
+int a2video_dlores_rotate(int n) { return ((n << 1) & 0xF) | ((n >> 3) & 1); }
+
+int a2video_dhires_colour(int dots4)
+{
+    /* AppleWin's DoubleHiresPalIndex, as lo-res colour numbers */
+    static const uint8_t k[16] = { 0, 2, 4, 6, 8, 10, 12, 14,
+                                   1, 3, 5, 7, 9, 11, 13, 15 };
+    return k[dots4 & 15];
+}
+
+uint32_t a2video_hires_pixel(const uint8_t line[40], int x)
+{
+    const int col = x / 7, bit = x % 7;
+    const int on = (line[col] >> bit) & 1;
+    const int shift = (line[col] & 0x80) != 0;
+    int l = 0, r = 0;
+
+    if (!on)
+        return HR_BLACK;
+    if (x > 0)
+        l = (line[(x - 1) / 7] >> ((x - 1) % 7)) & 1;
+    if (x + 1 < W)
+        r = (line[(x + 1) / 7] >> ((x + 1) % 7)) & 1;
+    if (l || r)
+        return HR_WHITE;
+    if (x & 1)
+        return shift ? HR_ORANGE : HR_GREEN;
+    return shift ? HR_BLUE : HR_VIOLET;
+}
+
+const char *a2video_hires_name(uint32_t rgb)
+{
+    switch (rgb & 0xFFFFFFu) {
+    case HR_BLACK:  return "black";
+    case HR_WHITE:  return "white";
+    case HR_GREEN:  return "green";
+    case HR_VIOLET: return "violet";
+    case HR_ORANGE: return "orange";
+    case HR_BLUE:   return "blue";
+    default:        return "?";
+    }
+}
+
+/* lowercase a-z, 5x7; written as pictures, converted on first use */
+static const char *const kLower[26][7] = {
+    {".....",".....",".###.","....#",".####","#...#",".####"},
+    {"#....","#....","#.##.","##..#","#...#","##..#","#.##."},
+    {".....",".....",".###.","#....","#....","#...#",".###."},
+    {"....#","....#",".##.#","#..##","#...#","#..##",".##.#"},
+    {".....",".....",".###.","#...#","#####","#....",".###."},
+    {"..##.",".#..#",".#...","###..",".#...",".#...",".#..."},
+    {".....",".####","#...#","#...#",".####","....#",".###."},
+    {"#....","#....","#.##.","##..#","#...#","#...#","#...#"},
+    {"..#..",".....",".##..","..#..","..#..","..#..",".###."},
+    {"...#.",".....","..##.","...#.","...#.","#..#.",".##.."},
+    {"#....","#....","#..#.","#.#..","##...","#.#..","#..#."},
+    {".##..","..#..","..#..","..#..","..#..","..#..",".###."},
+    {".....",".....","##.#.","#.#.#","#.#.#","#.#.#","#.#.#"},
+    {".....",".....","#.##.","##..#","#...#","#...#","#...#"},
+    {".....",".....",".###.","#...#","#...#","#...#",".###."},
+    {".....",".....","#.##.","##..#","#...#","####.","#...."},
+    {".....",".....",".##.#","#..##","#...#",".####","....#"},
+    {".....",".....","#.##.","##..#","#....","#....","#...."},
+    {".....",".....",".####","#....",".###.","....#","####."},
+    {".#...",".#...","###..",".#...",".#...",".#..#","..##."},
+    {".....",".....","#...#","#...#","#...#","#..##",".##.#"},
+    {".....",".....","#...#","#...#","#...#",".#.#.","..#.."},
+    {".....",".....","#...#","#...#","#.#.#","#.#.#",".#.#."},
+    {".....",".....","#...#",".#.#.","..#..",".#.#.","#...#"},
+    {".....","#...#","#...#","#...#",".####","....#",".###."},
+    {".....",".....","#####","...#.","..#..",".#...","#####"},
+};
+
+static void lower_rows(int letter, uint8_t rows[7])
+{
+    int y, x;
+    for (y = 0; y < 7; y++) {
+        uint8_t v = 0;
+        for (x = 0; x < 5; x++)
+            if (kLower[letter][y][x] == '#')
+                v |= (uint8_t)(1 << x);
+        rows[y] = v;
+    }
+}
+
+char a2video_glyph(uint8_t b, int alt, uint8_t rows[7], int *inverse, int *flash, int *mouse)
+{
+    uint8_t c = (uint8_t)(b & 0x7F);
+    int inv = (b < 0x40), fl = 0, mt = 0;
+
+    if (alt) {
+        inv = (b < 0x40) || (b >= 0x60 && b < 0x80);
+        if (b >= 0x40 && b < 0x60)
+            mt = 1;
+    } else {
+        fl = (b >= 0x40 && b < 0x80);
+    }
+    if (inverse) *inverse = inv;
+    if (flash) *flash = fl;
+    if (mouse) *mouse = mt;
+
+    if (mt) {
+        static const uint8_t k[7] = { 0x15, 0x0A, 0x15, 0x0A, 0x15, 0x0A, 0x15 };
+        memcpy(rows, k, 7);
+        return '~';
+    }
+    if (alt && c >= 0x61 && c <= 0x7A) {
+        lower_rows(c - 0x61, rows);
+        return (char)c;
+    }
+    if (alt && (c == 0x60 || c > 0x7A))
+        c = (uint8_t)(c - 0x20);        /* ` { | } ~ DEL: fold to @ [ \ ] ^ _ */
+    if (c < 0x20)
+        c = (uint8_t)(c + 0x40);
+    if (!alt && c >= 0x60)
+        c = (uint8_t)(c - 0x20);        /* the original generator has no lowercase */
+    memcpy(rows, kFont5x7[c - 0x20], 7);
+    return (char)c;
 }
 
 /* ---- public --------------------------------------------------------------*/
@@ -286,7 +401,7 @@ static void inspect_text(apple2debug *d, uint16_t base, int page, int col,
     char ch;
     const char *kind;
 
-    o->addr = (uint16_t)(text_row_addr(base, row) + col);
+    o->addr = (uint16_t)(a2video_text_row_addr(base, row) + col);
     apple2debug_read(d, o->addr, &v, 1);
     o->value = v;
     o->rx = col * CELL_W; o->ry = row * CELL_H; o->rw = CELL_W; o->rh = CELL_H;
@@ -304,7 +419,7 @@ static void inspect_lores(apple2debug *d, uint16_t base, int page, int col,
     const int lo = 0, hi = 1;
 
     (void)lo;
-    o->addr = (uint16_t)(text_row_addr(base, row) + col);
+    o->addr = (uint16_t)(a2video_text_row_addr(base, row) + col);
     apple2debug_read(d, o->addr, &v, 1);
     o->value = v;
     o->rx = col * CELL_W; o->ry = row * CELL_H + half * 4;
@@ -322,7 +437,7 @@ static void inspect_hires(apple2debug *d, uint16_t base, int page, int x,
 {
     uint8_t line[TEXT_COLS];
     const int col = x / 7, bit = x % 7;
-    const uint8_t v = (apple2debug_read(d, hires_row_addr(base, y), line,
+    const uint8_t v = (apple2debug_read(d, a2video_hires_row_addr(base, y), line,
                                         TEXT_COLS), line[col]);
     const int lit = (v >> bit) & 1;
     const int shift = (v & 0x80) != 0;
@@ -345,7 +460,7 @@ static void inspect_hires(apple2debug *d, uint16_t base, int page, int x,
     nb = left && right ? "left/right" : left ? "left" : right ? "right"
                                                               : "none";
 
-    o->addr = (uint16_t)(hires_row_addr(base, y) + col);
+    o->addr = (uint16_t)(a2video_hires_row_addr(base, y) + col);
     o->value = v;
     o->rx = col * 7; o->ry = y; o->rw = 7; o->rh = 1;
     snprintf(o->text, sizeof(o->text),

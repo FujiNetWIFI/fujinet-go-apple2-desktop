@@ -92,6 +92,22 @@ int apple2sym_parse_range(apple2debug *d, const char *text, uint16_t *lo,
     return 1;
 }
 
+int apple2sym_parse_range_bank(apple2debug *d, const char *text, int *bank,
+                               uint16_t *lo, uint16_t *hi)
+{
+    int len = 0, b;
+
+    if (bank) *bank = APPLE2_BANK_CURRENT;
+    if (!d || !text) return 0;
+    while (isspace((unsigned char)*text)) text++;
+    b = apple2debug_bank_parse(text, &len);
+    if (b > 0) {
+        text += len;
+        if (bank) *bank = b;
+    }
+    return apple2sym_parse_range(d, text, lo, hi);
+}
+
 /* ---- watches ------------------------------------------------------------------ */
 
 static struct {
@@ -170,14 +186,21 @@ unsigned apple2watch_generation(void)
     return g;
 }
 
-int apple2watch_range(apple2debug *d, int index, uint16_t *lo, uint16_t *hi)
+int apple2watch_range_bank(apple2debug *d, int index, int *bank, uint16_t *lo,
+                           uint16_t *hi)
 {
     char text[96];
     const char *t = apple2watch_text(index);
 
+    if (bank) *bank = APPLE2_BANK_CURRENT;
     if (!t) return 0;
     snprintf(text, sizeof text, "%s", t);
-    return apple2sym_parse_range(d, text, lo, hi);
+    return apple2sym_parse_range_bank(d, text, bank, lo, hi);
+}
+
+int apple2watch_range(apple2debug *d, int index, uint16_t *lo, uint16_t *hi)
+{
+    return apple2watch_range_bank(d, index, NULL, lo, hi);
 }
 
 int apple2watch_format(apple2debug *d, int index, char *dst, int dstsz)
@@ -185,28 +208,32 @@ int apple2watch_format(apple2debug *d, int index, char *dst, int dstsz)
     char text[96], name[48] = "";
     uint16_t lo, hi;
     const char *t = apple2watch_text(index);
-    int n = 0, i;
+    int n = 0, i, bank = APPLE2_BANK_CURRENT;
+    const char *pre;
 
     if (!dst || dstsz <= 0) return 0;
     dst[0] = '\0';
     if (!t) return 0;
     snprintf(text, sizeof text, "%s", t);
-    if (!apple2sym_parse_range(d, text, &lo, &hi))
+    if (!apple2sym_parse_range_bank(d, text, &bank, &lo, &hi))
         return snprintf(dst, (size_t)dstsz, "%-14s ?", text);
+    pre = apple2debug_bank_prefix(bank);
     apple2debug_address_label(d, lo, name, sizeof name);
-    n = snprintf(dst, (size_t)dstsz, "%-14s $%04X", text, lo);
+    n = snprintf(dst, (size_t)dstsz, "%-14s %s%s$%04X", text, pre ? pre : "",
+                 pre && *pre ? ":" : "", lo);
     if (n >= dstsz) return dstsz - 1;
     if (!apple2debug_is_stopped(d))
         return n + snprintf(dst + n, (size_t)(dstsz - n), "  -");
     if (lo == hi) {
         uint8_t b = 0;
-        apple2debug_read(d, lo, &b, 1);
+        if (!apple2debug_read_bank(d, bank, lo, &b, 1))
+            return n + snprintf(dst + n, (size_t)(dstsz - n), "  -");
         return n + snprintf(dst + n, (size_t)(dstsz - n), "  $%02X (%u)", b, b);
     }
     n += snprintf(dst + n, (size_t)(dstsz - n), "-$%04X ", hi);
     for (i = 0; i < 8 && lo + i <= hi && n < dstsz - 4; i++) {
         uint8_t b = 0;
-        apple2debug_read(d, (uint16_t)(lo + i), &b, 1);
+        apple2debug_read_bank(d, bank, (uint16_t)(lo + i), &b, 1);
         n += snprintf(dst + n, (size_t)(dstsz - n), " %02X", b);
     }
     if (hi - lo >= 8 && n < dstsz - 4)

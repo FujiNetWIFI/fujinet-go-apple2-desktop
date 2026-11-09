@@ -193,7 +193,7 @@ check_debugger(int p)
     for (size_t k = 0; k < sizeof words / sizeof *words; k++)
         require(p, "debugger", "button", words[k]);
     {
-        static const char *const vwords[] = { "Text 1", "Text 2", "Lo-res 1", "Lo-res 2", "Hi-res 1", "Hi-res 2" };
+        static const char *const vwords[] = { "Screen", "Decoded", "Follow screen", "Break on writes", "Switches", "Colours", "Timing" };
         for (size_t k = 0; k < sizeof vwords / sizeof *vwords; k++)
             require(p, "debugger/video", "view", vwords[k]);
     }

@@ -29,6 +29,12 @@ extern "C" {
 int apple2sym_parse_range(apple2debug *d, const char *text, uint16_t *lo,
                          uint16_t *hi);
 
+/* Like apple2sym_parse_range, with an optional bank prefix ("aux:$0400",
+ * "rom:FA62-FA70", "lc2:$D000.."): *bank is APPLE2_BANK_CURRENT without one.
+ * apple2sym_parse_range does not take a prefix (it fails on one). */
+int apple2sym_parse_range_bank(apple2debug *d, const char *text, int *bank,
+                               uint16_t *lo, uint16_t *hi);
+
 /* ---- watches ---- */
 #define APPLE2WATCH_MAX 64
 /* The process-wide list, like the symbol tables: it outlives the window. */
@@ -45,6 +51,10 @@ unsigned apple2watch_generation(void);
 int  apple2watch_format(apple2debug *d, int index, char *dst, int dstsz);
 /* The range a watch covers (for "show in Memory"). 1 if it resolves. */
 int  apple2watch_range(apple2debug *d, int index, uint16_t *lo, uint16_t *hi);
+/* Same, also giving the watch's bank (APPLE2_BANK_CURRENT unless it was typed
+ * with a prefix such as "aux:$0400"; apple2watch_format shows the prefix). */
+int  apple2watch_range_bank(apple2debug *d, int index, int *bank, uint16_t *lo,
+                            uint16_t *hi);
 
 /* ---- memory search ---- */
 enum { APPLE2SEARCH_HEX = 0, APPLE2SEARCH_TEXT };

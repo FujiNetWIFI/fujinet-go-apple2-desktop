@@ -16,6 +16,7 @@
 
 #include "apple2memtools.h"
 #include "debugger_internal.h"
+#include "apple2vidtab.h"
 
 typedef struct {
     char *dst;
@@ -40,7 +41,7 @@ static const char *const commands[] = {
     "frame", "break", "bp", "bpr", "bpw", "delete", "enable", "disable",
     "clear", "breaks", "print", "regs", "set", "mem", "dump", "poke", "video",
     "io", "map", "fujinet", "label", "labels", "symbols", "disasm", "dis",
-    "trace", "save", "watch", "unwatch", "find", NULL,
+    "trace", "save", "watch", "unwatch", "find", "bank", NULL,
 };
 
 static const char *help_text =
@@ -58,7 +59,10 @@ static const char *help_text =
     "set <reg> <expr>       e.g. set pc $0800, set a 0, set cf 1\n"
     "mem <addr> [len]       dump memory (side-effect free; alias dump)\n"
     "poke <addr> <v...>     write memory\n"
-    "video                  the video soft switches\n"
+    "bank                   the memory banks and which this machine has\n"
+    "  bank prefixes for mem, poke, disasm, find, watch and [ ] / { }:\n"
+    "  main: aux: lc1: lc2: lchi: rom: alc1: alc2: alchi:   e.g. mem aux:$0400 32\n"
+    "video [switches|colours|timing]   the video mode, soft switches and timing\n"
     "io (alias map)         the machine, soft switches, slots and memory map\n"
     "fujinet                the FujiNet link\n"
     "label <addr> <name> | labels [file] (alias symbols)\n"
@@ -96,6 +100,23 @@ static char *rest_of(char *p)
     while (*p && isspace((unsigned char)*p))
         p++;
     return p;
+}
+
+/* The next token with a leading "aux:" style bank prefix removed into *bank
+ * (APPLE2_BANK_CURRENT when there is none). "aux: $0400" works too. */
+static char *bank_tok(char **p, int *bank)
+{
+    int len = 0, b;
+    char *t = next_tok(p);
+
+    *bank = APPLE2_BANK_CURRENT;
+    if (!t) return NULL;
+    b = apple2debug_bank_parse(t, &len);
+    if (b < 0) return t;
+    *bank = b;
+    t += len;
+    if (!*t) t = next_tok(p);
+    return t;
 }
 
 static int eval(apple2debug *d, outbuf *o, const char *text, long *v)
@@ -400,7 +421,8 @@ int apple2debug_command(apple2debug *d, const char *command, char *dst, int dsts
         }
     } else if (!strcmp(cmd, "mem") || !strcmp(cmd, "m") ||
                !strcmp(cmd, "dump")) {
-        char *t = next_tok(&p), *l = next_tok(&p);
+        int bank;
+        char *t = bank_tok(&p, &bank), *l = next_tok(&p);
         uint8_t buf[256];
         w = 64;
         if (!t || eval(d, &o, t, &v) || (l && eval(d, &o, l, &w)))
@@ -409,25 +431,73 @@ int apple2debug_command(apple2debug *d, const char *command, char *dst, int dsts
             w = 256;
         if (w < 1)
             w = 1;
-        apple2debug_read(d, (uint16_t)v, buf, (int)w);
+        if (bank != APPLE2_BANK_CURRENT) {
+            if (!apple2debug_bank_valid(d, bank)) {
+                out(&o, "%s: not present on this machine\n",
+                    apple2debug_bank_name(bank));
+                return o.len;
+            }
+            out(&o, "%s ($FF where the bank has nothing)\n",
+                apple2debug_bank_name(bank));
+        }
+        apple2debug_read_bank(d, bank, (uint16_t)v, buf, (int)w);
         dump(&o, (uint16_t)v, buf, (int)w);
     } else if (!strcmp(cmd, "poke")) {
-        char *t = next_tok(&p), *b;
-        int n = 0;
+        int bank, n = 0;
+        char *t = bank_tok(&p, &bank), *b;
         if (!t || eval(d, &o, t, &v))
             return o.len;
+        if (bank != APPLE2_BANK_CURRENT && !apple2debug_bank_valid(d, bank)) {
+            out(&o, "%s: not present on this machine\n",
+                apple2debug_bank_name(bank));
+            return o.len;
+        }
         while ((b = next_tok(&p)) != NULL) {
             if (eval(d, &o, b, &w))
                 return o.len;
-            apple2debug_write(d, (uint16_t)(v + n), (uint8_t)w);
+            apple2debug_write_bank(d, bank, (uint16_t)(v + n), (uint8_t)w);
             n++;
         }
-        out(&o, "%d byte%s at $%04lX\n", n, n == 1 ? "" : "s",
+        out(&o, "%d byte%s at %s%s$%04lX\n", n, n == 1 ? "" : "s",
+            bank ? apple2debug_bank_prefix(bank) : "", bank ? ":" : "",
             (unsigned long)v & 0xffff);
+    } else if (!strcmp(cmd, "bank") || !strcmp(cmd, "banks")) {
+        int b;
+        for (b = APPLE2_BANK_CURRENT; b < APPLE2_BANK_COUNT; b++) {
+            uint16_t lo = 0, hi = 0xFFFF;
+            const char *pre = apple2debug_bank_prefix(b);
+            apple2debug_bank_range(d, b, &lo, &hi);
+            out(&o, "%-6s %-38s $%04X-$%04X  %s\n", *pre ? pre : "(cpu)",
+                apple2debug_bank_name(b), lo, hi,
+                apple2debug_bank_valid(d, b) ? "present" : "absent");
+        }
     } else if (!strcmp(cmd, "video")) {
-        char text[1024];
-        apple2debug_video_state(d, text, sizeof text);
-        out(&o, "%s", text);
+        /* video [pixel|switches|colours|timing]: the Video tab's sections */
+        char text[2048];
+        char *sec = next_tok(&p);
+        apple2vid_tab *vt = apple2vid_tab_new_for_debugger(d);
+        int i, which = -1;
+        if (sec)
+            for (i = 0; i < APPLE2VID_S_COUNT; i++)
+                if (!strncasecmp(sec, apple2vid_section_key(i), strlen(sec))) which = i;
+        if (vt) {
+            apple2vid_tab_refresh(vt, 1);
+            for (i = APPLE2VID_S_SWITCHES; i < APPLE2VID_S_COUNT; i++) {
+                if (which >= 0 && which != i) continue;
+                if (which < 0 && i == APPLE2VID_S_COLOURS) continue;
+                if (which < 0 && i == APPLE2VID_S_SWITCHES) {
+                    apple2vid_tab_text(vt, APPLE2VID_S_PIXEL, text, sizeof text);
+                    out(&o, "%s", text);
+                }
+                apple2vid_tab_text(vt, i, text, sizeof text);
+                out(&o, "%s%s", which < 0 && i == APPLE2VID_S_TIMING ? "\n" : "", text);
+            }
+            if (which == APPLE2VID_S_PIXEL) {
+                apple2vid_tab_text(vt, APPLE2VID_S_PIXEL, text, sizeof text);
+                out(&o, "%s", text);
+            }
+            apple2vid_tab_free(vt);
+        }
     } else if (!strcmp(cmd, "io") || !strcmp(cmd, "map")) {
         char text[2560];
         apple2debug_io_state(d, text, sizeof text);
@@ -448,7 +518,8 @@ int apple2debug_command(apple2debug *d, const char *command, char *dst, int dsts
         out(&o, "%s\n", msg);
     } else if (!strcmp(cmd, "disasm") || !strcmp(cmd, "dis") ||
                !strcmp(cmd, "d")) {
-        char *t = next_tok(&p), *n = next_tok(&p);
+        int bank;
+        char *t = bank_tok(&p, &bank), *n = next_tok(&p);
         apple2debug_line lines[64];
         apple2debug_cpu cp;
         int pcl, cnt, i;
@@ -461,7 +532,12 @@ int apple2debug_command(apple2debug *d, const char *command, char *dst, int dsts
             w = 64;
         if (w < 1)
             w = 1;
-        cnt = apple2debug_disassemble(d, (uint16_t)v, lines, (int)w, &pcl);
+        if (bank != APPLE2_BANK_CURRENT && !apple2debug_bank_valid(d, bank)) {
+            out(&o, "%s: not present on this machine\n",
+                apple2debug_bank_name(bank));
+            return o.len;
+        }
+        cnt = apple2debug_disassemble_bank(d, bank, (uint16_t)v, lines, (int)w, &pcl);
         for (i = 0; i < cnt; i++) {
             if (lines[i].label[0])
                 out(&o, "%s:\n", lines[i].label);
@@ -497,7 +573,8 @@ int apple2debug_command(apple2debug *d, const char *command, char *dst, int dsts
         else
             out(&o, "unwatch <n|all>\n");
     } else if (!strcmp(cmd, "find")) {
-        char *t = next_tok(&p);
+        int bank;
+        char *t = bank_tok(&p, &bank);
         int kind = APPLE2SEARCH_HEX, n = 0, flags = 0;
         uint8_t pat[APPLE2SEARCH_MAX], mask;
         uint16_t hit[32];
@@ -513,8 +590,10 @@ int apple2debug_command(apple2debug *d, const char *command, char *dst, int dsts
             out(&o, "find [hex] <bytes> | find text <string>\n");
             return o.len;
         }
-        cnt = apple2debug_search(d, pat, n, mask, flags, 0, 0xFFFF, hit, 32);
-        if (cnt < 0)
+        cnt = apple2debug_search_bank(d, bank, pat, n, mask, flags, 0, 0xFFFF, hit, 32);
+        if (bank != APPLE2_BANK_CURRENT && !apple2debug_bank_valid(d, bank))
+            out(&o, "%s: not present on this machine\n", apple2debug_bank_name(bank));
+        else if (cnt < 0)
             out(&o, "stop the machine first\n");
         else if (!cnt)
             out(&o, "not found\n");

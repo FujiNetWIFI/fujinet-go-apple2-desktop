@@ -28,6 +28,9 @@ typedef struct {
     int (*name)(void *user, const char *name, long *out);
     /* A byte of memory, without side effects. */
     uint8_t (*read8)(void *user, uint16_t addr);
+    /* Like read8 for a bank (apple2debug_bank) named by a prefix inside [] and
+     * {}: [aux:$0400]. May be NULL (the prefix is then read as the CPU view). */
+    uint8_t (*read8b)(void *user, int bank, uint16_t addr);
     void *user;
 } expr_ctx;
 

@@ -199,6 +199,16 @@ static uint8_t expr_read(void *user, uint16_t addr)
     return peek(user, addr);
 }
 
+static int bank_read_locked(apple2debug *d, int bank, uint16_t addr,
+                            uint8_t *dst, int n);
+
+static uint8_t expr_read_bank(void *user, int bank, uint16_t addr)
+{
+    uint8_t b = 0xFF;
+    bank_read_locked(user, bank, addr, &b, 1);
+    return b;
+}
+
 static int expr_name(void *user, const char *name, long *out)
 {
     apple2debug *d = user;
@@ -242,6 +252,7 @@ static int eval_locked(apple2debug *d, const char *text, long *out, char *err,
 
     ctx.name = expr_name;
     ctx.read8 = expr_read;
+    ctx.read8b = expr_read_bank;
     ctx.user = d;
     get_regs(d, &d->rs);
     return expr_eval(text, &ctx, out, err, errsz);
@@ -1323,20 +1334,29 @@ static void label_for_locked(apple2debug *d, uint16_t addr, char *dst, int dstsz
     }
 }
 
-static void fill_line_locked(apple2debug *d, uint16_t addr, apple2debug_line *l,
-                             uint16_t pc)
+static int bank_read_locked(apple2debug *d, int bank, uint16_t addr,
+                            uint8_t *dst, int n);
+
+static void fill_line_bank_locked(apple2debug *d, int bank, uint16_t addr,
+                                  apple2debug_line *l, uint16_t pc)
 {
     apple2dasm_line ins;
     int i, o = 0;
 
     memset(l, 0, sizeof *l);
-    decode_at(d, addr, &ins);
+    if (bank == APPLE2_BANK_CURRENT) {
+        decode_at(d, addr, &ins);
+    } else {
+        uint8_t code[3] = { 0xFF, 0xFF, 0xFF };
+        bank_read_locked(d, bank, addr, code, 3);
+        apple2dasm_decode(addr, code, &ins);
+    }
     l->address = addr;
     l->length = ins.len;
-    l->is_pc = addr == pc;
+    l->is_pc = bank == APPLE2_BANK_CURRENT && addr == pc;
     l->target = ins.target;
     l->flags = ins.flags;
-    for (i = 0; i < d->nbp; i++) {
+    for (i = 0; bank == APPLE2_BANK_CURRENT && i < d->nbp; i++) {
         const apple2debug_breakpoint *b = &d->bp[i];
         if ((b->type & APPLE2DEBUG_BP_EXEC) && addr >= b->start &&
             addr <= b->end) {
@@ -1365,6 +1385,12 @@ static void fill_line_locked(apple2debug *d, uint16_t addr, apple2debug_line *l,
                                  sizeof l->comment, 0);
         }
     }
+}
+
+static void fill_line_locked(apple2debug *d, uint16_t addr, apple2debug_line *l,
+                             uint16_t pc)
+{
+    fill_line_bank_locked(d, APPLE2_BANK_CURRENT, addr, l, pc);
 }
 
 int apple2debug_disassemble(apple2debug *d, uint16_t addr, apple2debug_line *out,
@@ -1779,6 +1805,255 @@ int apple2debug_trace_match(const apple2debug_trace *t, int filter, uint16_t lo,
                              APPLE2DASM_RET)) != 0;
     }
     return 1;
+}
+
+/* ---- memory banks ---------------------------------------------------------------- */
+
+static const struct { const char *name, *prefix; } bank_info[APPLE2_BANK_COUNT] = {
+    { "As the CPU sees it", "" },
+    { "Main RAM", "main" },
+    { "Aux RAM", "aux" },
+    { "Language card RAM bank 1 ($D000)", "lc1" },
+    { "Language card RAM bank 2 ($D000)", "lc2" },
+    { "Language card RAM ($E000)", "lchi" },
+    { "System ROM", "rom" },
+    { "Aux language card RAM bank 1 ($D000)", "alc1" },
+    { "Aux language card RAM bank 2 ($D000)", "alc2" },
+    { "Aux language card RAM ($E000)", "alchi" },
+};
+
+const char *apple2debug_bank_name(int bank)
+{
+    return bank >= 0 && bank < APPLE2_BANK_COUNT ? bank_info[bank].name : NULL;
+}
+
+const char *apple2debug_bank_prefix(int bank)
+{
+    return bank >= 0 && bank < APPLE2_BANK_COUNT ? bank_info[bank].prefix : NULL;
+}
+
+int apple2debug_bank_parse(const char *text, int *consumed)
+{
+    int b;
+    size_t n;
+
+    if (!text) return -1;
+    while (*text == ' ' || *text == '\t') text++;
+    for (b = APPLE2_BANK_MAIN; b < APPLE2_BANK_COUNT; b++) {
+        size_t k;
+        n = strlen(bank_info[b].prefix);
+        for (k = 0; k < n && tolower((unsigned char)text[k]) == bank_info[b].prefix[k]; k++) ;
+        if (k == n && text[n] == ':') {
+            if (consumed) *consumed = (int)n + 1;
+            return b;
+        }
+    }
+    return -1;
+}
+
+/* The host store and offset behind (bank, addr); 0 when the bank does not
+ * cover addr. */
+static int bank_map(int bank, uint16_t addr, int *store, unsigned *off)
+{
+    switch (bank) {
+    case APPLE2_BANK_MAIN: case APPLE2_BANK_AUX:
+        if (addr >= 0xC000) return 0;
+        *store = bank == APPLE2_BANK_MAIN ? APPLE2HOST_BANKSTORE_MAIN
+                                          : APPLE2HOST_BANKSTORE_AUX;
+        *off = addr;
+        return 1;
+    case APPLE2_BANK_LC1: case APPLE2_BANK_LC2: case APPLE2_BANK_LCHI:
+    case APPLE2_BANK_AUXLC1: case APPLE2_BANK_AUXLC2: case APPLE2_BANK_AUXLCHI: {
+        int hi = bank == APPLE2_BANK_LCHI || bank == APPLE2_BANK_AUXLCHI;
+        int two = bank == APPLE2_BANK_LC2 || bank == APPLE2_BANK_AUXLC2;
+        if (hi ? addr < 0xE000 : (addr < 0xD000 || addr >= 0xE000)) return 0;
+        *store = bank >= APPLE2_BANK_AUXLC1 ? APPLE2HOST_BANKSTORE_LCAUX
+                                            : APPLE2HOST_BANKSTORE_LCMAIN;
+        *off = hi ? 0x2000u + (addr - 0xE000u)
+                  : (two ? 0x1000u : 0u) + (addr - 0xD000u);
+        return 1;
+    }
+    case APPLE2_BANK_ROM:
+        if (addr < (apple2host_has_aux() ? 0xC100 : 0xD000)) return 0;
+        *store = APPLE2HOST_BANKSTORE_ROM;
+        *off = addr - 0xC000u;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int bank_present_locked(apple2debug *d, int bank)
+{
+    if (bank == APPLE2_BANK_CURRENT) return 1;
+    if (!d->live) return 0;
+    switch (bank) {
+    case APPLE2_BANK_MAIN: return apple2host_bank_present(APPLE2HOST_BANKSTORE_MAIN);
+    case APPLE2_BANK_AUX: return apple2host_bank_present(APPLE2HOST_BANKSTORE_AUX);
+    case APPLE2_BANK_LC1: case APPLE2_BANK_LC2: case APPLE2_BANK_LCHI:
+        return apple2host_bank_present(APPLE2HOST_BANKSTORE_LCMAIN);
+    case APPLE2_BANK_AUXLC1: case APPLE2_BANK_AUXLC2: case APPLE2_BANK_AUXLCHI:
+        return apple2host_bank_present(APPLE2HOST_BANKSTORE_LCAUX);
+    case APPLE2_BANK_ROM: return apple2host_bank_present(APPLE2HOST_BANKSTORE_ROM);
+    default: return 0;
+    }
+}
+
+static int bank_read_locked(apple2debug *d, int bank, uint16_t addr,
+                            uint8_t *dst, int n)
+{
+    int i, covered = 0;
+
+    if (bank == APPLE2_BANK_CURRENT) {
+        for (i = 0; i < n; i++) dst[i] = peek(d, (uint16_t)(addr + i));
+        return n;
+    }
+    memset(dst, 0xFF, (size_t)n);
+    if (!bank_present_locked(d, bank)) return 0;
+    for (i = 0; i < n; i++) {
+        int store;
+        unsigned off;
+        if (bank_map(bank, (uint16_t)(addr + i), &store, &off) &&
+            apple2host_bank_read(store, off, &dst[i], 1) == 1)
+            covered++;
+    }
+    return covered ? n : 0;
+}
+
+int apple2debug_bank_valid(apple2debug *d, int bank)
+{
+    int v;
+    if (!d || bank < 0 || bank >= APPLE2_BANK_COUNT) return 0;
+    pthread_mutex_lock(&d->mtx);
+    v = bank_present_locked(d, bank);
+    pthread_mutex_unlock(&d->mtx);
+    return v;
+}
+
+int apple2debug_bank_range(apple2debug *d, int bank, uint16_t *lo, uint16_t *hi)
+{
+    uint16_t l = 0, h = 0xFFFF;
+    if (!d || bank < 0 || bank >= APPLE2_BANK_COUNT) return 0;
+    switch (bank) {
+    case APPLE2_BANK_MAIN: case APPLE2_BANK_AUX: h = 0xBFFF; break;
+    case APPLE2_BANK_LC1: case APPLE2_BANK_LC2:
+    case APPLE2_BANK_AUXLC1: case APPLE2_BANK_AUXLC2: l = 0xD000; h = 0xDFFF; break;
+    case APPLE2_BANK_LCHI: case APPLE2_BANK_AUXLCHI: l = 0xE000; break;
+    case APPLE2_BANK_ROM: l = apple2host_has_aux() ? 0xC100 : 0xD000; break;
+    default: break;
+    }
+    if (lo) *lo = l;
+    if (hi) *hi = h;
+    return apple2debug_bank_valid(d, bank);
+}
+
+int apple2debug_read_bank(apple2debug *d, int bank, uint16_t addr, uint8_t *dst, int n)
+{
+    int r;
+    if (!d || !dst || n <= 0 || bank < 0 || bank >= APPLE2_BANK_COUNT) return 0;
+    pthread_mutex_lock(&d->mtx);
+    if (!d->live) {
+        memset(dst, 0, (size_t)n);
+        r = 0;
+    } else {
+        r = bank_read_locked(d, bank, addr, dst, n);
+    }
+    pthread_mutex_unlock(&d->mtx);
+    return r;
+}
+
+void apple2debug_write_bank(apple2debug *d, int bank, uint16_t addr, uint8_t value)
+{
+    int store;
+    unsigned off;
+
+    if (!d || bank < 0 || bank >= APPLE2_BANK_COUNT) return;
+    if (bank == APPLE2_BANK_CURRENT) {
+        apple2debug_write(d, addr, value);
+        return;
+    }
+    if (bank == APPLE2_BANK_ROM) return;
+    pthread_mutex_lock(&d->mtx);
+    if (d->live && bank_present_locked(d, bank) &&
+        bank_map(bank, addr, &store, &off)) {
+        apple2host_bank_write(store, off, &value, 1);
+        bump_locked(d);
+    }
+    pthread_mutex_unlock(&d->mtx);
+}
+
+int apple2debug_search_bank(apple2debug *d, int bank, const uint8_t *pat, int n,
+                            uint8_t mask, int flags, uint16_t from, uint16_t to,
+                            uint16_t *out, int max)
+{
+    uint16_t lo, hi;
+    uint8_t *buf;
+    unsigned a, first, last;
+    int found = 0, k;
+
+    if (bank == APPLE2_BANK_CURRENT)
+        return apple2debug_search(d, pat, n, mask, flags, from, to, out, max);
+    if (!d || !pat || n <= 0 || !out || max <= 0 || bank < 0 ||
+        bank >= APPLE2_BANK_COUNT) return -1;
+    pthread_mutex_lock(&d->mtx);
+    if (!d->live || !d->stopped) {
+        pthread_mutex_unlock(&d->mtx);
+        return -1;
+    }
+    if (!bank_present_locked(d, bank)) {
+        pthread_mutex_unlock(&d->mtx);
+        return 0;
+    }
+    pthread_mutex_unlock(&d->mtx);
+    apple2debug_bank_range(d, bank, &lo, &hi);
+    if (from > to) { uint16_t x = from; from = to; to = x; }
+    first = from < lo ? lo : from;
+    last = to > hi ? hi : to;
+    if (first > last) return 0;
+    buf = malloc(0x10000);
+    if (!buf) return -1;
+    pthread_mutex_lock(&d->mtx);
+    bank_read_locked(d, bank, (uint16_t)first, buf, (int)(last - first + 1));
+    pthread_mutex_unlock(&d->mtx);
+    for (a = first; a <= last && a + (unsigned)n - 1 <= last && found < max; a++) {
+        for (k = 0; k < n; k++) {
+            uint8_t b = buf[a - first + (unsigned)k];
+            uint8_t p = pat[k];
+            if (flags & APPLE2DEBUG_SEARCH_NOCASE) {
+                if (b >= 'a' && b <= 'z') b = (uint8_t)(b - 32);
+                if (p >= 'a' && p <= 'z') p = (uint8_t)(p - 32);
+            }
+            if ((b & mask) != (p & mask)) break;
+        }
+        if (k == n) out[found++] = (uint16_t)a;
+    }
+    free(buf);
+    return found;
+}
+
+int apple2debug_disassemble_bank(apple2debug *d, int bank, uint16_t addr,
+                                 apple2debug_line *out, int max, int *pc_line)
+{
+    int n = 0;
+    regs_t r;
+
+    if (bank == APPLE2_BANK_CURRENT)
+        return apple2debug_disassemble(d, addr, out, max, pc_line);
+    if (pc_line) *pc_line = -1;
+    if (!d || !out || bank < 0 || bank >= APPLE2_BANK_COUNT) return 0;
+    pthread_mutex_lock(&d->mtx);
+    if (!d->live || !bank_present_locked(d, bank)) {
+        pthread_mutex_unlock(&d->mtx);
+        return 0;
+    }
+    get_regs(d, &r);
+    while (n < max) {
+        fill_line_bank_locked(d, bank, addr, &out[n], (uint16_t)r.pc);
+        addr = (uint16_t)(addr + out[n].length);
+        n++;
+    }
+    pthread_mutex_unlock(&d->mtx);
+    return n;
 }
 
 /* ---- memory search ------------------------------------------------------------ */

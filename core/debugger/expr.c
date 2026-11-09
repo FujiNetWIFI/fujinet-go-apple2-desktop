@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "apple2debug.h"
 #include "expr.h"
 
 typedef struct {
@@ -117,6 +118,29 @@ static long number(parser *ps)
     return v;
 }
 
+static int read_mem(parser *ps, int bank, long a, int word)
+{
+    const expr_ctx *c = ps->ctx;
+    int v;
+    if (!c || !c->read8) return 0;
+#define RD(x) ((bank > 0 && c->read8b) ? c->read8b(c->user, bank, (uint16_t)(x)) \
+                                       : c->read8(c->user, (uint16_t)(x)))
+    v = RD(a);
+    if (word) v |= RD(a + 1) << 8;
+#undef RD
+    return v;
+}
+
+/* an optional "aux:" in front of the address inside [] or {} */
+static int bank_prefix(parser *ps)
+{
+    int len = 0, b;
+    skip(ps);
+    b = apple2debug_bank_parse(ps->p, &len);
+    if (b > 0) ps->p += len;
+    return b > 0 ? b : 0;
+}
+
 static long primary(parser *ps)
 {
     long v;
@@ -131,20 +155,19 @@ static long primary(parser *ps)
     }
     if (accept(ps, "["))
     {
+        int bank = bank_prefix(ps);
         long a = expr_or(ps);
         if (!accept(ps, "]"))
             fail(ps, "missing ]");
-        return ps->ctx && ps->ctx->read8 ? ps->ctx->read8(ps->ctx->user, (uint16_t)a) : 0;
+        return read_mem(ps, bank, a, 0);
     }
     if (accept(ps, "{"))
     {
+        int bank = bank_prefix(ps);
         long a = expr_or(ps);
         if (!accept(ps, "}"))
             fail(ps, "missing }");
-        if (!ps->ctx || !ps->ctx->read8)
-            return 0;
-        return ps->ctx->read8(ps->ctx->user, (uint16_t)a)
-             | (ps->ctx->read8(ps->ctx->user, (uint16_t)(a + 1)) << 8);
+        return read_mem(ps, bank, a, 1);
     }
     if (isdigit((unsigned char)*ps->p) || *ps->p == '$' || *ps->p == '%')
         return number(ps);

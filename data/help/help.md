@@ -315,15 +315,16 @@ and `pc`, the flags `cf`, `zf`, `if`, `df`, `bf`, `vf` and `nf`, `[addr]` and
 | `delete`, `enable`, `clear` | Manage breakpoints (also `disable`, `breaks`) |
 | `print` | Evaluates an expression |
 | `regs`, `set` | Shows or sets the registers |
-| `mem`, `dump`, `poke` | Dumps memory; writes bytes |
-| `video` | The video soft switches |
+| `mem`, `dump`, `poke` | Dumps memory; writes bytes (take a bank prefix: `mem aux:$0400 32`) |
+| `bank` | The memory banks and which this machine has |
+| `video` | The video mode, soft switches and timing (`video colours` adds the palette usage) |
 | `io`, `map` | The soft switches, the slots and the memory map |
 | `fujinet` | The FujiNet link |
 | `label`, `labels`, `symbols` | Name an address; load labels |
-| `disasm`, `dis` | Disassembles |
+| `disasm`, `dis` | Disassembles (`disasm rom:$FA62`) |
 | `trace` | The instruction trace |
 | `watch`, `unwatch` | The watch list: `watch count`, `unwatch 0` |
-| `find` | Searches memory for bytes (`find A9 00`) or text (`find text HELLO`) |
+| `find` | Searches memory for bytes (`find A9 00`) or text (`find text HELLO`); `find aux: text HELLO` searches one bank |
 | `save` | Saves state to a file |
 
 <!-- context: debugger/disassembly -->
@@ -349,6 +350,22 @@ switch. **Go To** takes an address, a label, an expression or a range
 writes bytes; ROM ignores them. The search bar finds hex bytes (`A9 00`) or
 text (not case-sensitive) with **Find Next** and **Find Previous**, wrapping
 once; the machine has to be stopped.
+
+### Memory banks
+
+The console can also look at a bank directly, whatever the soft switches say,
+by putting a prefix in front of the address: `main:`, `aux:` (auxiliary RAM),
+`lc1:` and `lc2:` (the language card's RAM banks at `$D000-$DFFF`), `lchi:`
+(language card RAM at `$E000-$FFFF`), `rom:` (the system ROM) and, for the
+auxiliary side's language card, `alc1:`, `alc2:` and `alchi:`. So `mem aux:$0400`
+dumps auxiliary text page 1, `poke lc2:$D000 $60` edits bank 2, `disasm rom:$FA62`
+reads the ROM even while the language card shows RAM, and `print [aux:$0400]`
+and `print {aux:$0400}` use a bank in an expression. The prefix works in `find`
+and in watches too (`watch aux:$0400`). `bank` lists them and says which this
+machine has: an Apple II+ has no auxiliary RAM, and the language card only if one is
+fitted. A bank shows `$FF` for addresses it does not cover (main and aux stop
+at `$BFFF`; `rom:` starts at `$D000`, or `$C100` on a //e). ROM ignores
+writes. RamWorks and Saturn extra banks are not shown.
 
 <!-- context: debugger/breakpoints -->
 ## Breakpoints
@@ -405,19 +422,62 @@ before you run to the place you want to look at.
 <!-- context: debugger/video -->
 ## Video
 
-A page inspector: it decodes a page of memory as the CPU sees it right now,
-*Text 1*, *Text 2*, *Lo-res 1*, *Lo-res 2*, *Hi-res 1* or *Hi-res 2*. It is a
-memory inspector, not what the video hardware is scanning out (the soft
-switches on the Slots and I/O tab say that), which is what makes it useful for
-finding the page a program is drawing into before it flips to it.
+The video inspector: the picture the machine is showing, and the memory behind it.
 
-Move the mouse over the picture to see the byte under it: its address, its
-value, and what that means (a text cell's character and whether it is inverse,
-flashing or normal; a lo-res block's colour nibble; a hi-res pixel's bit, its
-byte and the palette bit that picks violet/green or blue/orange). **Click** to
-pin that byte; click it again to unpin. A pinned byte keeps updating as the
-machine runs. **Double-click** to break on writes to that byte, which adds a
-Write breakpoint. **Show in Memory** jumps the Memory tab to it.
+**View** picks what is drawn:
+
+- *Screen* is the last finished frame, exactly as the machine displayed it (its
+  size depends on the video mode and on a Video HD card).
+- *Decoded* redraws video memory through the soft switches, always at 560 by
+  192: the 40-column modes are doubled across so that every byte cell is 14
+  pixels wide, and the 80-column and double modes (7 pixels per byte, aux
+  memory first) line up on the same grid. It shows Text 40, Text 80 (aux and
+  main columns interleaved), Lo-res, Double lo-res, Hi-res and Double hi-res,
+  page 1 or 2, with the bottom four lines as text in mixed mode, and
+  lowercase/MouseText when ALTCHARSET is on. Flashing characters are drawn
+  steady.
+
+**Follow screen** (on by default) makes Decoded track the mode, page and mixed
+setting the soft switches show right now. Turn it off to choose the mode and
+page yourself and look at a page the program is drawing into before it flips
+to it; the memory is read the same way whatever the machine is showing.
+**Zoom** is 1 to 4, or Fit.
+
+**Overlays** draw over either view: *Grid* (7 by 8 text cells, 7 by 4 lo-res
+blocks, hi-res byte cells), *Mixed split* (the line below which mixed mode
+shows text), *Beam* (the scanline being drawn; the display is 192 of the
+frame's 262 lines), *Heat* (bytes of the displayed page written lately, fading
+over about sixteen refreshes), and *Changed* (bytes that changed since the last
+refresh).
+
+Move the mouse over the picture to see the byte under it in the **Pixel** inspector: the
+cell, its main and aux addresses and values, and what they mean (a character
+and whether it is inverse, flashing or normal; a lo-res colour nibble, rotated
+once for the aux half of double lo-res; a hi-res pixel's bit and the palette
+bit that picks violet/green or blue/orange; a double hi-res dot group's
+colour). On the Screen view the pixel is mapped onto the same cell. **Click**
+to pin that byte and click it again to unpin; a pinned byte keeps updating as
+the machine runs.
+
+**Break on writes** adds Write breakpoints on the inspected byte: its main
+address, and its aux address too in the 80-column and double modes (the CPU
+writes both through the same address, with RAMWRT or 80STORE choosing the bank).
+
+The tables:
+
+- **Switches** lists the video soft switches (TEXT, MIXED, PAGE2, HIRES, 80COL,
+  80STORE, ALTCHARSET and DHIRES, which is AN3 clear), whether each is on, how
+  many refreshes ago it last changed, and the $C0xx addresses that set and clear
+  it. Break on a switch stops when either address is read or written.
+- **Colours** counts the pixels of the Decoded picture in each colour: the 16
+  lo-res colours, the six hi-res colours, or black and white for text. The
+  inspected pixel's colour is marked.
+- **Timing** shows the mode, the cycles per frame, where the beam is (line and
+  horizontal position), whether the machine is in vertical blank, and the frame
+  and cycle counts.
+
+The console's `video` command prints the same tables; `video switches`,
+`video colours` and `video timing` print one.
 
 <!-- context: debugger/fujinet -->
 ## FujiNet packets

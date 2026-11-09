@@ -215,6 +215,33 @@ void apple2host_inject_key(int down, unsigned keycode, uint32_t character,
 void apple2host_set_joystick_button(int port, int id, int pressed);
 void apple2host_set_joystick_axis(int port, int axis, int16_t value);
 
+/* --- bank seam ---------------------------------------------------------------
+ * Memory banks read straight from AppleWin's own storage (main, aux, language
+ * card RAM, ROM image), never through the soft-switch handlers. Where the
+ * flat 'mem' cache holds the live copy of a page, that copy is used (so
+ * unflushed writes are seen); otherwise the backing store. Emulator thread
+ * only. Not covered: RamWorks / Saturn extra banks, custom ROM overrides. */
+#define APPLE2HOST_BANKSTORE_MAIN    0  /* main RAM, offset = address, $0000-$BFFF */
+#define APPLE2HOST_BANKSTORE_AUX     1  /* aux RAM, same */
+#define APPLE2HOST_BANKSTORE_LCMAIN  2  /* main LC RAM 16K: +0 bank1, +$1000 bank2, +$2000 $E000-$FFFF */
+#define APPLE2HOST_BANKSTORE_LCAUX   3  /* aux LC RAM, same layout */
+#define APPLE2HOST_BANKSTORE_ROM     4  /* system ROM: offset = address - $C000; $0000-$0FFF
+                                           is the //e internal $C000-$CFFF ROM (only $C100-$CFFF
+                                           meaningful), $1000-$3FFF is $D000-$FFFF */
+#define APPLE2HOST_BANKSTORE_SIZE(s) ((s) <= 1 ? 0xC000u : 0x4000u)
+int      apple2host_bank_present(int store);                       /* 1 if the machine has it */
+/* Return the number of bytes read/written (0 if absent or outside the store).
+ * Writes to ROM are ignored (return 0). */
+unsigned apple2host_bank_read(int store, unsigned offset, uint8_t *out, unsigned len);
+unsigned apple2host_bank_write(int store, unsigned offset, const uint8_t *in, unsigned len);
+/* --- end bank seam --- */
+
+/* --- vidtab seam --- */
+/* Physical video RAM, whatever RAMRD/RAMWRT/80STORE say: aux=0 main, aux=1 aux.
+ * Returns bytes read (0 and zero-filled when the bank does not exist). */
+unsigned apple2host_read_video_ram(int aux, uint16_t addr, uint8_t *out, unsigned len);
+/* --- end vidtab seam --- */
+
 #ifdef __cplusplus
 }
 #endif
