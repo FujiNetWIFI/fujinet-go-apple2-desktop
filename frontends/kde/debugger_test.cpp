@@ -78,6 +78,18 @@ int pcOf(apple2debug *d)
 
 } // namespace
 
+/* A click on the video picture that cannot be read as the second half of a
+ * double-click. Qt Test stamps its events with synthetic times, and before Qt
+ * 6.8 two clicks on the same spot a few synthetic milliseconds apart (with
+ * anything in between) became a double-click, which pins and adds a
+ * breakpoint instead of unpinning. Waiting out the interval makes the clicks
+ * mean the same on every Qt. */
+static void clickPicture(QWidget *pic, const QPoint &at)
+{
+    QTest::mouseClick(pic, Qt::LeftButton, {}, at,
+                      QGuiApplication::styleHints()->mouseDoubleClickInterval() + 25);
+}
+
 class DebuggerTest : public QObject {
     Q_OBJECT
     QTemporaryDir m_dir;
@@ -1097,7 +1109,7 @@ private slots:
         const QPoint away(30 * 14 * 2 + 12, 10 * 8 * 2 + 6);
         QTest::mouseMove(pic, at);
         QTRY_VERIFY_WITH_TIMEOUT(pixel->text().contains(QLatin1String("0503")), 2000);
-        QTest::mouseClick(pic, Qt::LeftButton, {}, at);
+        clickPicture(pic, at);
         QTest::mouseMove(pic, away);                    /* the pin stays when the pointer leaves */
         QVERIFY(pixel->text().contains(QLatin1String("0503")));
         /* marks: the pin is yellow around the cell (2x: x = 84, y = 32 .. 48) */
@@ -1106,11 +1118,11 @@ private slots:
         shot(QStringLiteral("video-pixel"));
         /* the hover mark follows the pointer: white around the new cell (x = 840) */
         QTRY_VERIFY_WITH_TIMEOUT(hasColour(pic->grab().toImage(), 838, 842, 100, 255, 255, 255), 1000);
-        QTest::mouseClick(pic, Qt::LeftButton, {}, at);     /* the same spot unpins */
+        clickPicture(pic, at);     /* the same spot unpins */
         QTest::mouseMove(pic, away);
         QTRY_VERIFY_WITH_TIMEOUT(!pixel->text().contains(QLatin1String("0503")), 1000);
         QVERIFY(!hasColour(pic->grab().toImage(), 82, 86, 40, 255, 217, 26));
-        QTest::mouseClick(pic, Qt::LeftButton, {}, at);
+        clickPicture(pic, at);
         QTRY_VERIFY_WITH_TIMEOUT(pixel->text().contains(QLatin1String("0503")), 1000);
 
         /* a double-click adds a write breakpoint on the byte (Text 40 uses no aux), once */
@@ -1151,7 +1163,7 @@ private slots:
         /* Show in Memory: the Memory tab, on the byte, in main RAM */
         QTest::mouseClick(unpin, Qt::LeftButton);
         QTest::mouseMove(pic, away);
-        QTest::mouseClick(pic, Qt::LeftButton, {}, at);                 /* pin $0503 again */
+        clickPicture(pic, at);                 /* pin $0503 again */
         QTRY_VERIFY_WITH_TIMEOUT(pixel->text().contains(QLatin1String("0503")), 1000);
         QTest::mouseClick(mem, Qt::LeftButton);
         QCOMPARE(m_tabs->currentIndex(), 2);
@@ -1233,7 +1245,7 @@ private slots:
         QCOMPARE(sections->tabText(2), QStringLiteral("Colours"));
         QCOMPARE(sections->tabText(3), QStringLiteral("Timing"));
         /* pin a pixel so one entry is the inspected one */
-        QTest::mouseClick(pic, Qt::LeftButton, {}, QPoint(3 * 14 * 2 + 12, 2 * 8 * 2 + 6));
+        clickPicture(pic, QPoint(3 * 14 * 2 + 12, 2 * 8 * 2 + 6));
         sections->setCurrentIndex(2);
         auto *colours = vw<QTableWidget>("videoColours");
         QVERIFY(colours);
@@ -1254,7 +1266,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!timing->text().isEmpty() && timing->text() != QLatin1String("No timing yet"), 2000);
         shot(QStringLiteral("video-timing"));
         sections->setCurrentIndex(0);
-        QTest::mouseClick(pic, Qt::LeftButton, {}, QPoint(3 * 14 * 2 + 12, 2 * 8 * 2 + 6));     /* unpin */
+        clickPicture(pic, QPoint(3 * 14 * 2 + 12, 2 * 8 * 2 + 6));     /* unpin */
         pickText(vw<QComboBox>("videoZoom"), QStringLiteral("1×"));
         m_tabs->setCurrentIndex(0);
     }

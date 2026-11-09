@@ -13,6 +13,12 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+/* MinGW has no setenv/unsetenv; MSVCRT's _putenv_s("X", "") removes X. */
+#define setenv(name, value, overwrite) _putenv_s((name), (value))
+#define unsetenv(name) _putenv_s((name), "")
+#endif
+
 #include "apple2_host.h"
 #include "apple2debug.h"
 #include "apple2session.h"
