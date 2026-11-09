@@ -40,6 +40,7 @@
 
 #include <QCloseEvent>
 #include <QFileDialog>
+#include <QFontDatabase>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -400,6 +401,16 @@ DebuggerWindow::DebuggerWindow(apple2session *session, QWidget *parent)
             apple2debug_breakpoint_add(m_dbg, APPLE2DEBUG_BP_WRITE, lo, hi, "value != old", err, sizeof err);
         }
         if (!mg.isEmpty() && apple2sym_parse_range(m_dbg, mg.constData(), &lo, &hi)) showInMemory(lo, hi);
+        /* APPLE2_VIDEO_PIN="x,y" pins a point of the Video picture, for captures */
+        const QStringList pin = qEnvironmentVariable("APPLE2_VIDEO_PIN").split(QLatin1Char(','));
+        bool okx = false, oky = false;
+        if (pin.size() == 2) {
+            const int px = pin[0].trimmed().toInt(&okx), py = pin[1].trimmed().toInt(&oky);
+            if (okx && oky) {
+                refreshVideo();
+                viewPin(px, py);
+            }
+        }
         if (tabFromEnv("APPLE2_POPOUT") >= 0) popOut(tabFromEnv("APPLE2_POPOUT"));
     }
 
@@ -673,7 +684,10 @@ QWidget *DebuggerWindow::buildVideo()
     /* the page list comes from the engine, so a view added there shows up
      * here with no edit */
     for (int i = 0; apple2debug_view_name(i); i++) m_viewPick->addItem(QString::fromUtf8(apple2debug_view_name(i)));
-    connect(m_viewPick, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) { refreshVideo(); });
+    connect(m_viewPick, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        viewUnpin();                    /* the pin was a byte of the old page */
+        refreshVideo();
+    });
     row->addWidget(new QLabel(QStringLiteral("Page")));
     row->addWidget(m_viewPick);
     m_viewNote = new QLabel;
@@ -683,7 +697,47 @@ QWidget *DebuggerWindow::buildVideo()
     m_viewPic = new QLabel;
     m_viewPic->setFixedSize(APPLE2VIEW_WIDTH * 2, APPLE2VIEW_HEIGHT * 2);
     m_viewPic->setStyleSheet(QStringLiteral("background: black;"));
-    v->addWidget(m_viewPic, 0, Qt::AlignLeft | Qt::AlignTop);
+    m_viewPic->setMouseTracking(true);
+    m_viewPic->installEventFilter(this);
+    auto *body = new QHBoxLayout;
+    body->addWidget(m_viewPic, 0, Qt::AlignLeft | Qt::AlignTop);
+    auto *side = new QVBoxLayout;
+    const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    m_viewHoverTxt = new QLabel(QStringLiteral("Hover the picture to inspect a byte"));
+    m_viewHoverTxt->setFont(mono);
+    m_viewHoverTxt->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_viewPinTxt = new QLabel;
+    m_viewPinTxt->setFont(mono);
+    m_viewPinTxt->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_viewMsg = new QLabel;
+    m_viewMsg->setStyleSheet(kGray);
+    auto *btns = new QHBoxLayout;
+    auto *goMem = new QPushButton(QStringLiteral("Show in Memory"));
+    goMem->setToolTip(QStringLiteral("Show the pinned byte (else the one under the mouse) in the Memory tab"));
+    connect(goMem, &QPushButton::clicked, this, [this] {
+        if (!m_viewPinned && !m_viewHover) {
+            m_viewMsg->setText(QStringLiteral("Click a byte in the picture first"));
+            return;
+        }
+        const uint16_t a = m_viewPinned ? m_viewPinPx.addr : m_viewHoverPx.addr;
+        if (m_popped[TAB_MEMORY]) m_popped[TAB_MEMORY]->activateWindow();
+        else m_tabs->setCurrentWidget(m_pages[TAB_MEMORY]);
+        showInMemory(a, a);
+    });
+    auto *unpin = new QPushButton(QStringLiteral("Unpin"));
+    unpin->setToolTip(QStringLiteral("Drop the pinned byte"));
+    connect(unpin, &QPushButton::clicked, this, [this] { viewUnpin(); });
+    btns->addWidget(goMem);
+    btns->addWidget(unpin);
+    btns->addStretch(1);
+    side->addWidget(new QLabel(QStringLiteral("Click pins a byte, double-click breaks on writes to it")));
+    side->addWidget(m_viewHoverTxt);
+    side->addWidget(m_viewPinTxt);
+    side->addWidget(m_viewMsg);
+    side->addLayout(btns);
+    side->addStretch(1);
+    body->addLayout(side, 1);
+    v->addLayout(body);
     v->addWidget(hintLabel(QStringLiteral("A memory inspector: it decodes the page the CPU sees now, which is how "
                                           "to find the buffer a program draws into before it flips to it.")));
     v->addStretch(1);
@@ -1135,9 +1189,92 @@ void DebuggerWindow::refreshVideo()
     const QImage img((const uchar *)m_viewFb.data(), APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT, APPLE2VIEW_WIDTH * 4,
                      QImage::Format_RGB32);
     /* nearest-neighbour on purpose: this is a pixel inspector, so smoothing
-     * would hide what is being inspected */
-    m_viewPic->setPixmap(QPixmap::fromImage(img.copy().scaled(APPLE2VIEW_WIDTH * 2, APPLE2VIEW_HEIGHT * 2,
-                                                              Qt::IgnoreAspectRatio, Qt::FastTransformation)));
+     * would hide what is being inspected. Cached unmarked, so a hover only
+     * redraws the outlines. */
+    m_viewImg = img.scaled(APPLE2VIEW_WIDTH * 2, APPLE2VIEW_HEIGHT * 2, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    if (m_viewPinned) {
+        /* the pinned byte, live; its value is the point */
+        if (apple2debug_view_inspect(m_dbg, (apple2debug_view)sel, m_viewPinX, m_viewPinY, &m_viewPinPx) != 0 ||
+            !m_viewPinPx.valid)
+            m_viewPinned = false;
+    }
+    if (m_viewHover &&
+        (apple2debug_view_inspect(m_dbg, (apple2debug_view)sel, m_viewHoverPx.rx, m_viewHoverPx.ry, &m_viewHoverPx) != 0 ||
+         !m_viewHoverPx.valid))
+        m_viewHover = false;
+    viewDraw();
+}
+
+/* The cached picture with the white hover cell and the yellow pinned one
+ * outlined, and the two texts beside it. */
+void DebuggerWindow::viewDraw()
+{
+    if (m_viewImg.isNull()) return;
+    QImage img = m_viewImg.copy();
+    QPainter p(&img);
+    auto box = [&p](const apple2debug_pixel &px, const QColor &c) {
+        p.setPen(c);
+        p.drawRect(px.rx * 2, px.ry * 2, px.rw * 2 - 1, px.rh * 2 - 1);
+    };
+    if (m_viewHover) box(m_viewHoverPx, Qt::white);
+    if (m_viewPinned) box(m_viewPinPx, Qt::yellow);
+    p.end();
+    m_viewPic->setPixmap(QPixmap::fromImage(img));
+    m_viewHoverTxt->setText(m_viewHover ? QStringLiteral("Hover\n") + QString::fromUtf8(m_viewHoverPx.text)
+                                        : QStringLiteral("Hover the picture to inspect a byte"));
+    m_viewPinTxt->setText(m_viewPinned ? QStringLiteral("Pinned\n") + QString::fromUtf8(m_viewPinPx.text) : QString());
+}
+
+void DebuggerWindow::viewHover(int x, int y)
+{
+    const int sel = m_viewPick->currentIndex();
+    m_viewHover = sel >= 0 && x >= 0 && y >= 0 &&
+                  apple2debug_view_inspect(m_dbg, (apple2debug_view)sel, x, y, &m_viewHoverPx) == 0 && m_viewHoverPx.valid;
+    viewDraw();
+}
+
+/* Pins the byte under (x, y); the same cell again unpins. */
+void DebuggerWindow::viewPin(int x, int y)
+{
+    const int sel = m_viewPick->currentIndex();
+    apple2debug_pixel px = {};
+    if (sel < 0 || apple2debug_view_inspect(m_dbg, (apple2debug_view)sel, x, y, &px) != 0 || !px.valid) return;
+    if (m_viewPinned && m_viewPinPx.rx == px.rx && m_viewPinPx.ry == px.ry) {
+        viewUnpin();
+        return;
+    }
+    m_viewPinned = true;
+    m_viewPinPx = px;
+    m_viewPinX = x;
+    m_viewPinY = y;
+    viewDraw();
+}
+
+void DebuggerWindow::viewUnpin()
+{
+    m_viewPinned = false;
+    if (m_viewPinTxt) viewDraw();
+}
+
+/* Double-click: stop on writes to that byte, unless one is already set. */
+void DebuggerWindow::viewBreak(int x, int y)
+{
+    const int sel = m_viewPick->currentIndex();
+    apple2debug_pixel px = {};
+    if (sel < 0 || apple2debug_view_inspect(m_dbg, (apple2debug_view)sel, x, y, &px) != 0 || !px.valid) return;
+    static apple2debug_breakpoint bps[BP_MAX];
+    const int n = apple2debug_breakpoint_list(m_dbg, bps, BP_MAX);
+    for (int i = 0; i < n; i++) {
+        if (bps[i].enabled && (bps[i].type & APPLE2DEBUG_BP_WRITE) && bps[i].start == px.addr && bps[i].end == px.addr) {
+            m_viewMsg->setText(QStringLiteral("Break on writes to $%1").arg(hx(px.addr, 4)));
+            return;
+        }
+    }
+    char err[160] = "";
+    if (apple2debug_breakpoint_add(m_dbg, APPLE2DEBUG_BP_WRITE, px.addr, px.addr, "", err, sizeof err) < 0)
+        m_viewMsg->setText(QString::fromUtf8(err));
+    else
+        m_viewMsg->setText(QStringLiteral("Break on writes to $%1").arg(hx(px.addr, 4)));
 }
 
 void DebuggerWindow::refreshBps()
@@ -1940,6 +2077,29 @@ bool DebuggerWindow::eventFilter(QObject *obj, QEvent *e)
             else if (ke->key() == Qt::Key_Down && m_historyPos < m_history.size()) ++m_historyPos;
             m_conIn->setText(m_historyPos < m_history.size() ? m_history.at(m_historyPos) : QString());
             return true;
+        }
+    }
+    if (m_viewPic && obj == m_viewPic) {
+        /* the picture is shown at 2x: widget pixels halve into picture ones */
+        const auto at = [](QMouseEvent *me) { return me->position().toPoint() / 2; };
+        switch (e->type()) {
+        case QEvent::MouseMove: {
+            const QPoint pt = at(static_cast<QMouseEvent *>(e));
+            viewHover(pt.x(), pt.y());
+            return true;
+        }
+        case QEvent::Leave: viewHover(-1, -1); return true;
+        case QEvent::MouseButtonPress: {
+            auto *me = static_cast<QMouseEvent *>(e);
+            if (me->button() == Qt::LeftButton) viewPin(at(me).x(), at(me).y());
+            return true;
+        }
+        case QEvent::MouseButtonDblClick: {
+            auto *me = static_cast<QMouseEvent *>(e);
+            if (me->button() == Qt::LeftButton) viewBreak(at(me).x(), at(me).y());
+            return true;
+        }
+        default: break;
         }
     }
     if (m_disasm && obj == m_disasm->viewport()) {

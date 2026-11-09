@@ -40,7 +40,8 @@
  * page, an index), APPLE2_WATCH (a watch to add), APPLE2_WATCH_BREAK (a
  * break-on-change over it), APPLE2_MEM_GOTO (the Memory tab's Go to),
  * APPLE2_HISTORY=1 (recording on) and APPLE2_POPOUT (a tab to pop out, named
- * like APPLE2_DEBUGGER_TAB).
+ * like APPLE2_DEBUGGER_TAB), APPLE2_VIDEO_PIN=x,y (pins that picture point on
+ * the Video tab).
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -181,6 +182,7 @@ enum {
     IDC_H_REC0, IDC_H_REC1, IDC_H_CLEAR0, IDC_H_CLEAR1, IDC_H_FILTER0, IDC_H_FILTER1, IDC_H_RANGE0, IDC_H_RANGE1,
     IDC_H_TEXT0, IDC_H_TEXT1,
     IDC_FUJI_CLEAR, IDC_FUJI_TEXT, IDC_FUJI_STATE,
+    IDC_VID_SHOWMEM, IDC_VID_UNPIN,
     IDC_SAVE_KIND0, IDC_SAVE_KIND_LAST = IDC_SAVE_KIND0 + NSAVE - 1,
     IDC_LABEL_FIRST
 };
@@ -190,6 +192,9 @@ enum {
 typedef struct {
     const uint32_t *px; /* owned by the debugger struct */
     int w, h;
+    void *owner;        /* the debugger, for the mouse */
+    int tracking;       /* a WM_MOUSELEAVE is requested */
+    int mark[2][5];     /* hover, pin: on, then x, y, w, h in picture coordinates */
 } pixel_view;
 
 typedef struct {
@@ -234,6 +239,10 @@ typedef struct {
 
     /* video */
     HWND vid_label, view_pick, vid_note, view_pic;
+    HWND vid_hover, vid_pinned, vid_status, vid_showmem, vid_unpin;
+    int vid_pin_on, vid_pin_x, vid_pin_y;   /* the pinned point, picture coordinates */
+    int vid_last_ok;                        /* a byte was hovered (the Show in Memory fallback) */
+    uint16_t vid_last_addr;
     uint32_t px[APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT];
     pixel_view pic;
 
@@ -1011,6 +1020,8 @@ static void refresh_disasm(debugger *d)
 /* Decode whichever page the combo names. This shows a PAGE, not what the
  * machine is currently displaying -- which is the point: it is how you see
  * the buffer a program is drawing into before it flips to it. */
+static void video_pin_refresh(debugger *d);
+
 static void refresh_video(debugger *d)
 {
     char note[120];
@@ -1023,6 +1034,7 @@ static void refresh_video(debugger *d)
     snprintf(note, sizeof note, "Memory from $%04X as the CPU sees it now; not necessarily what is on screen",
              apple2debug_view_base((apple2debug_view)sel));
     set_label(d->vid_note, note);
+    video_pin_refresh(d);
     InvalidateRect(d->view_pic, NULL, FALSE);
 }
 
@@ -1922,6 +1934,125 @@ static void on_accept(debugger *d, int id)
     }
 }
 
+/* ---- the video inspector: hover, pin, break on writes ------------------------------ */
+
+static apple2debug_view video_view(debugger *d)
+{
+    int sel = (int)SendMessageA(d->view_pick, CB_GETCURSEL, 0, 0);
+    return (apple2debug_view)(sel < 0 ? 0 : sel);
+}
+
+static void video_set_mark(debugger *d, int k, const apple2debug_pixel *p)
+{
+    int *m = d->pic.mark[k];
+    int on = p ? 1 : 0, x = p ? p->rx : 0, y = p ? p->ry : 0, w = p ? p->rw : 0, h = p ? p->rh : 0;
+    if (m[0] == on && m[1] == x && m[2] == y && m[3] == w && m[4] == h) return;
+    m[0] = on; m[1] = x; m[2] = y; m[3] = w; m[4] = h;
+    InvalidateRect(d->view_pic, NULL, FALSE);
+}
+
+static void video_pin_refresh(debugger *d)
+{
+    apple2debug_pixel p;
+    char buf[300];
+    if (!d->vid_pin_on) return;
+    if (apple2debug_view_inspect(d->dbg, video_view(d), d->vid_pin_x, d->vid_pin_y, &p) != 0 || !p.valid) return;
+    video_set_mark(d, 1, &p);
+    snprintf(buf, sizeof buf, "Pinned:\n%s", p.text);
+    set_label(d->vid_pinned, buf);
+}
+
+static void video_unpin(debugger *d)
+{
+    d->vid_pin_on = 0;
+    video_set_mark(d, 1, NULL);
+    set_label(d->vid_pinned, "");
+}
+
+static void video_pin_at(debugger *d, int x, int y)
+{
+    d->vid_pin_on = 1;
+    d->vid_pin_x = x;
+    d->vid_pin_y = y;
+    video_pin_refresh(d);
+}
+
+static void video_break_writes(debugger *d, uint16_t addr)
+{
+    apple2debug_breakpoint list[MAX_BPS];
+    char err[96], msg[140];
+    int n = apple2debug_breakpoint_list(d->dbg, list, MAX_BPS), i;
+    for (i = 0; i < n; i++)
+        if ((list[i].type & APPLE2DEBUG_BP_WRITE) && list[i].enabled && list[i].start == addr &&
+            list[i].end == addr && !list[i].condition[0]) {
+            snprintf(msg, sizeof msg, "Break on writes to $%04X", addr);
+            set_label(d->vid_status, msg);
+            return;
+        }
+    err[0] = 0;
+    if (apple2debug_breakpoint_add(d->dbg, APPLE2DEBUG_BP_WRITE, addr, addr, "", err, sizeof err) >= 0)
+        snprintf(msg, sizeof msg, "Break on writes to $%04X", addr);
+    else
+        snprintf(msg, sizeof msg, "%s", err[0] ? err : "Could not add the breakpoint");
+    set_label(d->vid_status, msg);
+}
+
+/* kind 0 move, 1 leave, 2 click, 3 double click; x, y in the picture's client area */
+static void video_mouse(debugger *d, int kind, int mx, int my)
+{
+    apple2debug_pixel p;
+    RECT c;
+    int x, y, ok = 0;
+    if (kind == 1) {
+        video_set_mark(d, 0, NULL);
+        set_label(d->vid_hover, "");
+        return;
+    }
+    GetClientRect(d->view_pic, &c);
+    if (c.right <= 0 || c.bottom <= 0 || d->pic.w <= 0) return;
+    x = mx * d->pic.w / c.right;
+    y = my * d->pic.h / c.bottom;
+    if (mx >= 0 && my >= 0 && mx < c.right && my < c.bottom &&
+        apple2debug_view_inspect(d->dbg, video_view(d), x, y, &p) == 0 && p.valid)
+        ok = 1;
+    if (!ok) {
+        video_set_mark(d, 0, NULL);
+        set_label(d->vid_hover, "");
+        return;
+    }
+    d->vid_last_ok = 1;
+    d->vid_last_addr = p.addr;
+    if (kind == 0) {
+        video_set_mark(d, 0, &p);
+        set_label(d->vid_hover, p.text);
+        return;
+    }
+    if (kind == 2 && d->vid_pin_on && d->pic.mark[1][1] == p.rx && d->pic.mark[1][2] == p.ry) {
+        video_unpin(d);
+        return;
+    }
+    video_pin_at(d, x, y);
+    if (kind == 3) video_break_writes(d, p.addr);
+}
+
+static void on_vid_showmem(debugger *d)
+{
+    apple2debug_pixel p;
+    int addr = -1;
+    if (d->vid_pin_on && apple2debug_view_inspect(d->dbg, video_view(d), d->vid_pin_x, d->vid_pin_y, &p) == 0 &&
+        p.valid)
+        addr = p.addr;
+    else if (d->vid_last_ok)
+        addr = d->vid_last_addr;
+    if (addr < 0) {
+        set_label(d->vid_status, "Hover or click a byte of the picture first");
+        return;
+    }
+    set_label(d->vid_status, "");
+    show_in_memory(d, (uint16_t)addr, (uint16_t)addr);
+    goto_tab(d, TAB_MEMORY);
+}
+
 /* ---- the video pictures ----------------------------------------------------------- */
 
 static void paint_pixels(HWND hwnd, HDC hdc)
@@ -1941,10 +2072,29 @@ static void paint_pixels(HWND hwnd, HDC hdc)
         SetStretchBltMode(hdc, COLORONCOLOR); /* nearest: keep pixels */
         StretchDIBits(hdc, 0, 0, c.right, c.bottom, 0, 0, pv->w, pv->h, pv->px, &bmi,
                       DIB_RGB_COLORS, SRCCOPY);
+        if (pv->w > 0 && pv->h > 0) {
+            static const COLORREF col[2] = { RGB(255, 255, 255), RGB(255, 220, 0) };
+            int k;
+            HGDIOBJ oldb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            for (k = 0; k < 2; k++) {
+                HPEN pen, oldp;
+                if (!pv->mark[k][0]) continue;
+                pen = CreatePen(PS_SOLID, 1, col[k]);
+                oldp = SelectObject(hdc, pen);
+                Rectangle(hdc, pv->mark[k][1] * c.right / pv->w, pv->mark[k][2] * c.bottom / pv->h,
+                          (pv->mark[k][1] + pv->mark[k][3]) * c.right / pv->w + 1,
+                          (pv->mark[k][2] + pv->mark[k][4]) * c.bottom / pv->h + 1);
+                SelectObject(hdc, oldp);
+                DeleteObject(pen);
+            }
+            SelectObject(hdc, oldb);
+        }
     } else {
         FillRect(hdc, &c, (HBRUSH)GetStockObject(BLACK_BRUSH));
     }
 }
+
+static void video_mouse(debugger *d, int kind, int x, int y);
 
 static LRESULT CALLBACK pixels_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -1960,6 +2110,23 @@ static LRESULT CALLBACK pixels_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_MOUSEMOVE || msg == WM_MOUSELEAVE || msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+        pixel_view *pv = (pixel_view *)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+        if (pv && pv->owner) {
+            if (msg == WM_MOUSEMOVE && !pv->tracking) {
+                TRACKMOUSEEVENT te;
+                memset(&te, 0, sizeof te);
+                te.cbSize = sizeof te;
+                te.dwFlags = TME_LEAVE;
+                te.hwndTrack = hwnd;
+                if (TrackMouseEvent(&te)) pv->tracking = 1;
+            }
+            if (msg == WM_MOUSELEAVE) pv->tracking = 0;
+            video_mouse((debugger *)pv->owner, msg == WM_MOUSEMOVE ? 0 : msg == WM_MOUSELEAVE ? 1 :
+                        msg == WM_LBUTTONDOWN ? 2 : 3, (short)LOWORD(lp), (short)HIWORD(lp));
+            return 0;
+        }
+    }
     return DefWindowProcA(hwnd, msg, wp, lp);
 }
 
@@ -2209,6 +2376,9 @@ static HWND pixels(debugger *d, int id, pixel_view *pv, const uint32_t *px)
     pv->px = px;
     pv->w = 0;
     pv->h = 0;
+    pv->owner = d;
+    pv->tracking = 0;
+    memset(pv->mark, 0, sizeof pv->mark);
     SetWindowLongPtrA(v, GWLP_USERDATA, (LONG_PTR)pv);
     return v;
 }
@@ -2438,6 +2608,11 @@ static void build_controls(debugger *d)
     SendMessageA(d->view_pick, CB_SETCURSEL, 0, 0);
     d->vid_note = dim_label(d, "", SS_LEFT | SS_ENDELLIPSIS);
     d->view_pic = pixels(d, IDC_VIEW_PIC, &d->pic, d->px);
+    d->vid_hover = label(d, "", d->mono, SS_LEFT);
+    d->vid_pinned = label(d, "", d->mono, SS_LEFT);
+    d->vid_status = dim_label(d, "", SS_LEFT | SS_ENDELLIPSIS);
+    d->vid_showmem = button(d, "Show in Memory", IDC_VID_SHOWMEM);
+    d->vid_unpin = button(d, "Unpin", IDC_VID_UNPIN);
 
     /* FujiNet: the note and the log are UTF-8 (see wide_view_text) */
     begin_page(d, TAB_FUJINET);
@@ -2654,7 +2829,10 @@ static void layout_page(debugger *d, int page, int pw, int ph)
          * inspector), or less when the window is smaller than one */
         double sc;
         int pwid, phgt;
-        const int top = py + eh + S(d, 10), aw = pw, ah = ph - eh - S(d, 10);
+        const int top = py + eh + S(d, 10), ah = ph - eh - S(d, 10);
+        const int cw = d->mono_w * 40 < pw / 2 ? d->mono_w * 40 : pw / 2;
+        const int aw = pw - cw - S(d, 12);
+        int cy;
         w = text_w(d, d->ui_bold, "Page") + S(d, 8);
         place(d->vid_label, px, py + (eh - lh) / 2, w, lh);
         place(d->view_pick, px + w, py, S(d, 220), S(d, 240));
@@ -2665,6 +2843,17 @@ static void layout_page(debugger *d, int page, int pw, int ph)
         pwid = (int)(APPLE2VIEW_WIDTH * sc);
         phgt = (int)(APPLE2VIEW_HEIGHT * sc);
         place(d->view_pic, px, top, pwid, phgt);
+        x = px + aw + S(d, 12);
+        cy = top;
+        place(d->vid_hover, x, cy, cw, d->mono_h * 7);
+        cy += d->mono_h * 7 + S(d, 8);
+        place(d->vid_pinned, x, cy, cw, d->mono_h * 8);
+        cy += d->mono_h * 8 + S(d, 8);
+        w = btn_w(d, "Show in Memory");
+        place(d->vid_showmem, x, cy, w, bh);
+        place(d->vid_unpin, x + w + gap, cy, btn_w(d, "Unpin"), bh);
+        cy += bh + S(d, 6);
+        place(d->vid_status, x, cy, cw, lh);
         break;
     }
 
@@ -3132,8 +3321,13 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_SCANLINE: apple2debug_scanline(d->dbg, 1); settle_and_sync(d, 1); return 0;
         case IDC_FRAME: apple2debug_frame(d->dbg, 1); settle_and_sync(d, 1); return 0;
         case IDC_VIEW_PICK:
-            if (HIWORD(wp) == CBN_SELCHANGE) refresh_video(d);
+            if (HIWORD(wp) == CBN_SELCHANGE) {
+                video_unpin(d);
+                refresh_video(d);
+            }
             return 0;
+        case IDC_VID_SHOWMEM: on_vid_showmem(d); return 0;
+        case IDC_VID_UNPIN: video_unpin(d); return 0;
         case IDC_RUN_TO: on_run_to(d); return 0;
         case IDC_TOGGLE_BP: on_toggle_bp(d); return 0;
         case IDC_HELP_BTN: apple2_help_for(d->hwnd); return 0;
@@ -3281,6 +3475,10 @@ static void env_hooks(debugger *d)
         const int idx = atoi(v);
         if (idx >= 0 && idx < APPLE2VIEW_COUNT) SendMessageA(d->view_pick, CB_SETCURSEL, (WPARAM)idx, 0);
     }
+    if ((v = getenv("APPLE2_VIDEO_PIN")) != NULL && *v) {
+        int pxl, pyl;
+        if (sscanf(v, "%d,%d", &pxl, &pyl) == 2) video_pin_at(d, pxl, pyl);
+    }
     if ((tab = tab_from_env_var("APPLE2_POPOUT")) >= 0) pop_out(d, tab);
     resync(d);
 }
@@ -3314,7 +3512,7 @@ void apple2_debugger_show(HWND parent, apple2session *session)
     if (!registered) {
         register_class(inst, DBG_CLASS, dbg_proc, (HBRUSH)(COLOR_BTNFACE + 1), CS_HREDRAW | CS_VREDRAW);
         register_class(inst, DISASM_CLASS, disasm_proc, NULL, CS_DBLCLKS);
-        register_class(inst, PIXELS_CLASS, pixels_proc, NULL, 0);
+        register_class(inst, PIXELS_CLASS, pixels_proc, NULL, CS_DBLCLKS);
         register_class(inst, MEMVIEW_CLASS, memview_proc, NULL, 0);
         register_class(inst, PAGE_CLASS, page_proc, (HBRUSH)(COLOR_BTNFACE + 1), 0);
         register_class(inst, POP_CLASS, pop_proc, (HBRUSH)(COLOR_BTNFACE + 1), CS_HREDRAW | CS_VREDRAW);

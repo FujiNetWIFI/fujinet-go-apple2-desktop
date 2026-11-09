@@ -15,6 +15,7 @@
 #pragma once
 
 #include <QCheckBox>
+#include <QImage>
 #include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
@@ -161,6 +162,18 @@ private:
     QComboBox *m_viewPick = nullptr;
     QLabel *m_viewPic = nullptr, *m_viewNote = nullptr;
     std::vector<uint32_t> m_viewFb;
+    /* the click-to-inspect: the page drawn at 2x (no marks), what is under
+     * the mouse and what is pinned */
+    QImage m_viewImg;
+    QLabel *m_viewHoverTxt = nullptr, *m_viewPinTxt = nullptr, *m_viewMsg = nullptr;
+    bool m_viewHover = false, m_viewPinned = false;
+    apple2debug_pixel m_viewHoverPx = {}, m_viewPinPx = {};
+    int m_viewPinX = 0, m_viewPinY = 0;
+    void viewHover(int x, int y);       /* picture coords, or -1 to clear */
+    void viewPin(int x, int y);
+    void viewUnpin();
+    void viewBreak(int x, int y);
+    void viewDraw();
 
     /* breakpoints */
     QTableWidget *m_bpTable = nullptr;

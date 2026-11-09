@@ -22,6 +22,7 @@
  */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "apple2debug.h"
@@ -267,4 +268,120 @@ int apple2debug_render_view(apple2debug *d, apple2debug_view view,
         memset(dst, 0, (size_t)W * H * sizeof(*dst));
         return -1;
     }
+}
+
+/* ---- inspector -----------------------------------------------------------*/
+
+static const char *const kLoresNames[16] = {
+    "black", "magenta", "dark blue", "purple", "dark green", "grey",
+    "medium blue", "light blue", "brown", "orange", "grey", "pink",
+    "green", "yellow", "aqua", "white",
+};
+
+static void inspect_text(apple2debug *d, uint16_t base, int page, int col,
+                         int row, apple2debug_pixel *o)
+{
+    int inverse = 0;
+    uint8_t v = 0;
+    char ch;
+    const char *kind;
+
+    o->addr = (uint16_t)(text_row_addr(base, row) + col);
+    apple2debug_read(d, o->addr, &v, 1);
+    o->value = v;
+    o->rx = col * CELL_W; o->ry = row * CELL_H; o->rw = CELL_W; o->rh = CELL_H;
+    ch = (char)(glyph_index(v, &inverse) + 0x20);
+    kind = v >= 0x80 ? "normal" : v >= 0x40 ? "flash" : "inverse";
+    snprintf(o->text, sizeof(o->text),
+             "Text page %d  row %d col %d\n$%04X = $%02X  '%c'  %s",
+             page, row, col, o->addr, v, ch, kind);
+}
+
+static void inspect_lores(apple2debug *d, uint16_t base, int page, int col,
+                          int row, int half, apple2debug_pixel *o)
+{
+    uint8_t v = 0;
+    const int lo = 0, hi = 1;
+
+    (void)lo;
+    o->addr = (uint16_t)(text_row_addr(base, row) + col);
+    apple2debug_read(d, o->addr, &v, 1);
+    o->value = v;
+    o->rx = col * CELL_W; o->ry = row * CELL_H + half * 4;
+    o->rw = CELL_W; o->rh = 4;
+    snprintf(o->text, sizeof(o->text),
+             "Lo-res page %d  block %d,%d\n$%04X = $%02X  low nibble %X (%s) "
+             "top, high nibble %X (%s) bottom \xE2\x80\x94 this block: %s",
+             page, col, row * 2 + half, o->addr, v, v & 0x0F,
+             kLoresNames[v & 0x0F], v >> 4, kLoresNames[v >> 4],
+             half == hi ? "high nibble (bottom)" : "low nibble (top)");
+}
+
+static void inspect_hires(apple2debug *d, uint16_t base, int page, int x,
+                          int y, apple2debug_pixel *o)
+{
+    uint8_t line[TEXT_COLS];
+    const int col = x / 7, bit = x % 7;
+    const uint8_t v = (apple2debug_read(d, hires_row_addr(base, y), line,
+                                        TEXT_COLS), line[col]);
+    const int lit = (v >> bit) & 1;
+    const int shift = (v & 0x80) != 0;
+    int left = 0, right = 0;
+    const char *clr, *nb;
+
+    if (x > 0)
+        left = (line[(x - 1) / 7] >> ((x - 1) % 7)) & 1;
+    if (x + 1 < W)
+        right = (line[(x + 1) / 7] >> ((x + 1) % 7)) & 1;
+
+    if (!lit)
+        clr = "black";
+    else if (left || right)
+        clr = "white";
+    else if (x & 1)
+        clr = shift ? "orange" : "green";
+    else
+        clr = shift ? "blue" : "violet";
+    nb = left && right ? "left/right" : left ? "left" : right ? "right"
+                                                              : "none";
+
+    o->addr = (uint16_t)(hires_row_addr(base, y) + col);
+    o->value = v;
+    o->rx = col * 7; o->ry = y; o->rw = 7; o->rh = 1;
+    snprintf(o->text, sizeof(o->text),
+             "Hi-res page %d  x %d y %d\n$%04X = $%02X  pixel bit %d = %d  "
+             "palette bit 7 = %d (%s)\nneighbours lit: %s\ncolour: %s",
+             page, x, y, o->addr, v, bit, lit, shift,
+             shift ? "blue/orange" : "violet/green", nb, clr);
+}
+
+int apple2debug_view_inspect(apple2debug *d, apple2debug_view view, int x,
+                             int y, apple2debug_pixel *out)
+{
+    const uint16_t base = apple2debug_view_base(view);
+
+    if (!out)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    if (!d || view < 0 || view >= APPLE2VIEW_COUNT || x < 0 || y < 0 ||
+        x >= W || y >= H)
+        return -1;
+
+    switch (view) {
+    case APPLE2VIEW_TEXT_1:
+    case APPLE2VIEW_TEXT_2:
+        inspect_text(d, base, view == APPLE2VIEW_TEXT_1 ? 1 : 2, x / CELL_W,
+                     y / CELL_H, out);
+        break;
+    case APPLE2VIEW_LORES_1:
+    case APPLE2VIEW_LORES_2:
+        inspect_lores(d, base, view == APPLE2VIEW_LORES_1 ? 1 : 2, x / CELL_W,
+                      y / CELL_H, (y % CELL_H) >= 4, out);
+        break;
+    default:
+        inspect_hires(d, base, view == APPLE2VIEW_HIRES_1 ? 1 : 2, x, y, out);
+        break;
+    }
+    out->valid = 1;
+    return 0;
 }

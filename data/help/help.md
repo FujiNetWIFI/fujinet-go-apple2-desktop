@@ -411,6 +411,14 @@ memory inspector, not what the video hardware is scanning out (the soft
 switches on the Slots and I/O tab say that), which is what makes it useful for
 finding the page a program is drawing into before it flips to it.
 
+Move the mouse over the picture to see the byte under it: its address, its
+value, and what that means (a text cell's character and whether it is inverse,
+flashing or normal; a lo-res block's colour nibble; a hi-res pixel's bit, its
+byte and the palette bit that picks violet/green or blue/orange). **Click** to
+pin that byte; click it again to unpin. A pinned byte keeps updating as the
+machine runs. **Double-click** to break on writes to that byte, which adds a
+Write breakpoint. **Show in Memory** jumps the Memory tab to it.
+
 <!-- context: debugger/fujinet -->
 ## FujiNet packets
 

@@ -183,6 +183,75 @@ int main(void)
         CHECK(px(fb, 0, 2) == 0x000000, "y2 unexpectedly lit");
     }
 
+    /* ---- the inspector --------------------------------------------------- */
+    {
+        apple2debug_pixel ip;
+
+        fill(d, 0x0400, 0x400, 0xA0);
+        /* row 5 col 12 -> $0400 + 5*0x80 + 12 = $068C; use the real one. */
+        apple2debug_write(d, 0x068C, 0xC8);
+        CHECK(apple2debug_view_inspect(d, APPLE2VIEW_TEXT_1, 12 * 7 + 3,
+                                       5 * 8 + 2, &ip) == 0, "text inspect");
+        CHECK(ip.valid && ip.addr == 0x068C && ip.value == 0xC8, "text addr");
+        CHECK(ip.rx == 84 && ip.ry == 40 && ip.rw == 7 && ip.rh == 8,
+              "text rect");
+        CHECK(strstr(ip.text, "row 5 col 12") && strstr(ip.text, "'H'") &&
+              strstr(ip.text, "normal"), "text words: %s", ip.text);
+        apple2debug_write(d, 0x0428, 0x10); /* row 8 col 0, inverse, ^P */
+        apple2debug_view_inspect(d, APPLE2VIEW_TEXT_1, 0, 64, &ip);
+        CHECK(ip.addr == 0x0428 && strstr(ip.text, "inverse") &&
+              strstr(ip.text, "'P'"), "text inverse: %s", ip.text);
+        apple2debug_write(d, 0x0429, 0x41);
+        apple2debug_view_inspect(d, APPLE2VIEW_TEXT_1, 7, 64, &ip);
+        CHECK(strstr(ip.text, "flash") && strstr(ip.text, "'A'"),
+              "text flash: %s", ip.text);
+
+        /* lo-res: $0428 = row 8 col 0; low nibble 8 top, high nibble C */
+        apple2debug_write(d, 0x0428, 0xC8);
+        apple2debug_view_inspect(d, APPLE2VIEW_LORES_1, 2, 64 + 1, &ip);
+        CHECK(ip.addr == 0x0428 && ip.value == 0xC8 && ip.rx == 0 &&
+              ip.ry == 64 && ip.rw == 7 && ip.rh == 4, "lores top rect");
+        CHECK(strstr(ip.text, "brown") && strstr(ip.text, "low nibble (top)"),
+              "lores top: %s", ip.text);
+        apple2debug_view_inspect(d, APPLE2VIEW_LORES_1, 2, 64 + 6, &ip);
+        CHECK(ip.ry == 68 && ip.rh == 4 &&
+              strstr(ip.text, "high nibble (bottom)") &&
+              strstr(ip.text, "block 0,17"), "lores bottom: %s", ip.text);
+
+        /* hi-res: y 9 -> $2000 + 1*0x400 + 1*0x80 = $2480; x 85 = col 12 bit 1 */
+        fill(d, 0x2000, 0x2000, 0x00);
+        apple2debug_write(d, 0x2480 + 12, 0xD5);
+        CHECK(apple2debug_view_inspect(d, APPLE2VIEW_HIRES_1, 85, 9, &ip) == 0,
+              "hires inspect");
+        CHECK(ip.addr == 0x248C && ip.value == 0xD5 && ip.rx == 84 &&
+              ip.ry == 9 && ip.rw == 7 && ip.rh == 1, "hires addr/rect");
+        /* bit 1 of $D5 is 0 */
+        CHECK(strstr(ip.text, "bit 1 = 0") && strstr(ip.text, "bit 7 = 1") &&
+              strstr(ip.text, "blue/orange") && strstr(ip.text, "black"),
+              "hires words: %s", ip.text);
+        apple2debug_view_inspect(d, APPLE2VIEW_HIRES_1, 84, 9, &ip);
+        CHECK(strstr(ip.text, "bit 0 = 1") && strstr(ip.text, "colour: blue"),
+              "hires lone even: %s", ip.text);
+        apple2debug_view_inspect(d, APPLE2VIEW_HIRES_1, 86, 9, &ip);
+        CHECK(strstr(ip.text, "bit 2 = 1") && strstr(ip.text, "colour: blue"),
+              "hires bit2: %s", ip.text);
+        apple2debug_view_inspect(d, APPLE2VIEW_HIRES_1, 87, 9, &ip);
+        CHECK(strstr(ip.text, "bit 3 = 0"), "hires bit3: %s", ip.text);
+        apple2debug_write(d, 0x2480 + 12, 0xD7); /* bits 0,1,2 lit */
+        apple2debug_view_inspect(d, APPLE2VIEW_HIRES_1, 85, 9, &ip);
+        CHECK(strstr(ip.text, "left/right") && strstr(ip.text, "colour: white"),
+              "hires white: %s", ip.text);
+
+        CHECK(apple2debug_view_inspect(d, APPLE2VIEW_HIRES_1, 280, 0, &ip) == -1
+              && !ip.valid, "x out of range");
+        CHECK(apple2debug_view_inspect(d, APPLE2VIEW_TEXT_1, 0, 192, &ip) == -1,
+              "y out of range");
+        CHECK(apple2debug_view_inspect(d, APPLE2VIEW_TEXT_1, -1, 0, &ip) == -1,
+              "negative x");
+        CHECK(apple2debug_view_inspect(d, (apple2debug_view)999, 0, 0, &ip) == -1
+              && !ip.valid, "unknown view");
+    }
+
     /* ---- an unknown view blanks rather than scribbling ------------------- */
     CHECK(apple2debug_render_view(d, (apple2debug_view)999, fb) == -1,
           "unknown view did not report an error");

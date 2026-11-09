@@ -959,6 +959,66 @@ private slots:
         shot(QStringLiteral("video"));
     }
 
+    /* Video inspector: hover reads a byte, a click pins it, a double-click
+     * breaks on writes to it. Text page 1, cell (3,2) = $0503. */
+    void videoInspector()
+    {
+        m_tabs->setCurrentIndex(8);
+        QTRY_VERIFY_WITH_TIMEOUT(m_tabs->currentWidget()->isVisible(), 1000);
+        auto *pick = m_tabs->currentWidget()->findChild<QComboBox *>();
+        QVERIFY(pick);
+        pick->setCurrentIndex((int)APPLE2VIEW_TEXT_1);
+        apple2debug_write(m_d, 0x0503, 0xC1);
+        QLabel *pic = nullptr;
+        QLabel *hoverTxt = nullptr, *pinTxt = nullptr, *msg = nullptr;
+        for (QLabel *l : m_tabs->currentWidget()->findChildren<QLabel *>()) {
+            if (l->minimumWidth() >= APPLE2VIEW_WIDTH) pic = l;
+            else if (l->text().startsWith(QLatin1String("Hover"))) hoverTxt = l;
+            else if (l->textInteractionFlags() & Qt::TextSelectableByMouse) pinTxt = l;
+            else if (l->styleSheet().contains(QLatin1String("gray")) && l->text().isEmpty()) msg = l;
+        }
+        QVERIFY(pic && hoverTxt && pinTxt && msg);
+        QPushButton *unpin = nullptr;
+        for (QPushButton *b : m_tabs->currentWidget()->findChildren<QPushButton *>())
+            if (b->text() == QLatin1String("Unpin")) unpin = b;
+        QVERIFY(unpin);
+        QTRY_VERIFY_WITH_TIMEOUT(!pic->pixmap(Qt::ReturnByValue).isNull(), 2000);
+        const QPoint at(3 * 7 * 2 + 6, 2 * 8 * 2 + 6);      /* inside the cell, at 2x */
+        QTest::mouseMove(pic, at);
+        QTRY_VERIFY_WITH_TIMEOUT(hoverTxt->text().contains(QLatin1String("0503")), 2000);
+        QTest::mouseClick(pic, Qt::LeftButton, {}, at);
+        QTRY_VERIFY_WITH_TIMEOUT(pinTxt->text().contains(QLatin1String("0503")), 2000);
+        QTest::mouseClick(pic, Qt::LeftButton, {}, at);     /* the same cell again unpins */
+        QTRY_VERIFY_WITH_TIMEOUT(pinTxt->text().isEmpty(), 2000);
+        QTest::mouseClick(pic, Qt::LeftButton, {}, at);
+        QTRY_VERIFY_WITH_TIMEOUT(pinTxt->text().contains(QLatin1String("0503")), 2000);
+        /* a double-click adds a write breakpoint at that address, once */
+        apple2debug_breakpoint_clear(m_d);
+        QTest::mouseDClick(pic, Qt::LeftButton, {}, at);
+        QTRY_VERIFY_WITH_TIMEOUT(msg->text().contains(QLatin1String("0503")), 2000);
+        apple2debug_breakpoint bps[16];
+        int n = apple2debug_breakpoint_list(m_d, bps, 16);
+        int writes = 0;
+        for (int i = 0; i < n; i++)
+            if (bps[i].type == APPLE2DEBUG_BP_WRITE && bps[i].start == 0x0503 && bps[i].end == 0x0503) writes++;
+        QCOMPARE(writes, 1);
+        QTest::mouseDClick(pic, Qt::LeftButton, {}, at);
+        n = apple2debug_breakpoint_list(m_d, bps, 16);
+        writes = 0;
+        for (int i = 0; i < n; i++)
+            if (bps[i].type == APPLE2DEBUG_BP_WRITE && bps[i].start == 0x0503) writes++;
+        QCOMPARE(writes, 1);
+        apple2debug_breakpoint_clear(m_d);
+        QTest::mouseClick(unpin, Qt::LeftButton);
+        QVERIFY(pinTxt->text().isEmpty());
+        /* a page change drops a pin */
+        QTest::mouseClick(pic, Qt::LeftButton, {}, at);
+        QTRY_VERIFY_WITH_TIMEOUT(!pinTxt->text().isEmpty(), 2000);
+        pick->setCurrentIndex((int)APPLE2VIEW_TEXT_2);
+        QTRY_VERIFY_WITH_TIMEOUT(pinTxt->text().isEmpty(), 2000);
+        pick->setCurrentIndex(0);
+    }
+
     /* FujiNet: empty without the runtime, and says so. */
     void fujinetTab()
     {

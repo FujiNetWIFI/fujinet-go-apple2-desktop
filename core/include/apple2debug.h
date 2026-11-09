@@ -257,6 +257,27 @@ uint16_t apple2debug_view_base(apple2debug_view view);
 int apple2debug_render_view(apple2debug *d, apple2debug_view view,
                             uint32_t *dst);
 
+/* ---- the video inspector ---------------------------------------------------
+ * What is under a point of the picture render_view drew, for a hover/click
+ * inspector: the memory byte that holds it, its value now, and what it means
+ * (a text cell's character and attribute, a lo-res block's colour nibble, a
+ * hi-res pixel's bit, its byte, and the palette bit). x and y are picture
+ * coordinates (0..APPLE2VIEW_WIDTH-1, 0..APPLE2VIEW_HEIGHT-1), not window
+ * ones. Reads live memory without side effects; fine while the machine
+ * runs (the value is then whatever it was a moment ago). */
+typedef struct {
+    int      valid;            /* 0: the point is outside the picture */
+    uint16_t addr;             /* the byte that holds it */
+    uint8_t  value;            /* that byte now */
+    int      rx, ry, rw, rh;   /* the cell (text, lo-res) or the byte's seven
+                                  pixels (hi-res), in picture coordinates, for
+                                  a highlight */
+    char     text[240];        /* monospace lines describing it */
+} apple2debug_pixel;
+/* Returns 0 and fills out, or -1 for an unknown view or a point outside. */
+int apple2debug_view_inspect(apple2debug *d, apple2debug_view view, int x,
+                             int y, apple2debug_pixel *out);
+
 /* ---- FujiNet: the SmartPort packets on the SLIP link, both ways -----------
  * Every request the SmartPort card sends FujiNet and every reply, recorded
  * from session start whether or not a debugger window is open: it is most

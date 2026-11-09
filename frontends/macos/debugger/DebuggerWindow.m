@@ -184,6 +184,77 @@ static NSImage *imageFromXRGB(const uint32_t *px, int w, int h, int stride)
     return img;
 }
 
+/* The Video tab's picture: reports the mouse in picture coordinates (hover,
+ * leave, click with its click count). Not flipped; y is turned over here. */
+@interface VideoPicView : NSImageView
+@property (nonatomic, copy) void (^onHover)(int x, int y);        /* x < 0: left */
+@property (nonatomic, copy) void (^onClick)(int x, int y, NSInteger clicks);
+@end
+
+@implementation VideoPicView {
+    NSTrackingArea *_area;
+}
+
+- (void)updateTrackingAreas
+{
+    [super updateTrackingAreas];
+    if (_area) [self removeTrackingArea:_area];
+    _area = [[NSTrackingArea alloc] initWithRect:self.bounds
+                                         options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited |
+                                                 NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
+                                           owner:self userInfo:nil];
+    [self addTrackingArea:_area];
+}
+
+/* The picture point under the event, or NO outside the view. */
+- (BOOL)pictureX:(int *)x y:(int *)y event:(NSEvent *)event
+{
+    const NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+    const NSSize sz = self.bounds.size;
+    if (sz.width < 1 || sz.height < 1 || p.x < 0 || p.y < 0 || p.x >= sz.width || p.y >= sz.height) return NO;
+    *x = (int)(p.x * APPLE2VIEW_WIDTH / sz.width);
+    *y = (int)((sz.height - 1 - p.y) * APPLE2VIEW_HEIGHT / sz.height);   /* AppKit's y is up */
+    if (*x >= APPLE2VIEW_WIDTH) *x = APPLE2VIEW_WIDTH - 1;
+    if (*y >= APPLE2VIEW_HEIGHT) *y = APPLE2VIEW_HEIGHT - 1;
+    return *x >= 0 && *y >= 0;
+}
+
+- (void)mouseMoved:(NSEvent *)event
+{
+    int x, y;
+    if (!self.onHover) return;
+    if ([self pictureX:&x y:&y event:event]) self.onHover(x, y);
+    else self.onHover(-1, -1);
+}
+
+- (void)mouseExited:(NSEvent *)event
+{
+    (void)event;
+    if (self.onHover) self.onHover(-1, -1);
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    int x, y;
+    if (self.onClick && [self pictureX:&x y:&y event:event]) self.onClick(x, y, event.clickCount);
+}
+@end
+
+/* A 1-pixel outline of a picture rectangle, clipped to the picture. */
+static void outlineRect(uint32_t *fb, int rx, int ry, int rw, int rh, uint32_t colour)
+{
+    for (int i = 0; i < rw; i++)
+        for (int e = 0; e < 2; e++) {
+            const int x = rx + i, y = e ? ry + rh - 1 : ry;
+            if (x >= 0 && x < APPLE2VIEW_WIDTH && y >= 0 && y < APPLE2VIEW_HEIGHT) fb[y * APPLE2VIEW_WIDTH + x] = colour;
+        }
+    for (int j = 0; j < rh; j++)
+        for (int e = 0; e < 2; e++) {
+            const int y = ry + j, x = e ? rx + rw - 1 : rx;
+            if (x >= 0 && x < APPLE2VIEW_WIDTH && y >= 0 && y < APPLE2VIEW_HEIGHT) fb[y * APPLE2VIEW_WIDTH + x] = colour;
+        }
+}
+
 @interface DebuggerWindow () <NSTabViewDelegate, NSTableViewDataSource>
 - (instancetype)initWithSession:(apple2session *)session;
 - (void)show;
@@ -249,8 +320,12 @@ static NSImage *imageFromXRGB(const uint32_t *px, int w, int h, int stride)
 
     NSPopUpButton *_viewPick;
     NSTextField *_viewNote;
-    NSImageView *_viewPic;
-    uint32_t *_viewFb;          /* APPLE2VIEW_WIDTH x APPLE2VIEW_HEIGHT, XRGB8888 */
+    VideoPicView *_viewPic;
+    uint32_t *_viewFb;          /* APPLE2VIEW_WIDTH x APPLE2VIEW_HEIGHT, XRGB8888: the page as rendered */
+    uint32_t *_viewDraw;        /* the same with the hover and pin outlines drawn in */
+    NSTextField *_viewHover, *_viewPinned, *_viewStatus;
+    apple2debug_pixel _hov, _pin;   /* .valid 0: no hover / no pin */
+    int _hovX, _hovY, _pinX, _pinY; /* the picture points they were read at */
 
     NSPopUpButton *_bpType;
     NSTextField *_bpStart, *_bpEnd, *_bpCond, *_bpErr, *_bpStop;
@@ -592,6 +667,7 @@ static void fill(NSStackView *stack, NSView *view)
     _memBase = 0x0400;          /* text page 1 */
     _selected = -1;
     _viewFb = calloc((size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT, sizeof(uint32_t));
+    _viewDraw = calloc((size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT, sizeof(uint32_t));
     _history = [NSMutableArray array];
     [self buildWindow];
 
@@ -614,6 +690,20 @@ static void fill(NSStackView *stack, NSView *view)
         if (view && *view) {
             const int idx = atoi(view);
             if (idx >= 0 && idx < _viewPick.numberOfItems) [_viewPick selectItemAtIndex:idx];
+        }
+        /* a point of the picture to pin, "x,y" in picture coordinates */
+        const char *pin = getenv("APPLE2_VIDEO_PIN");
+        int px, py;
+        if (pin && sscanf(pin, "%d , %d", &px, &py) == 2) {
+            [self refreshVideo];    /* the page must exist before it is inspected */
+            if (apple2debug_view_inspect(_dbg, (apple2debug_view)_viewPick.indexOfSelectedItem, px, py, &_pin) == 0 &&
+                _pin.valid) {
+                _pinX = px;
+                _pinY = py;
+                [self refreshVideo];
+            } else {
+                _pin.valid = 0;
+            }
         }
         if (popOut && *popOut) {
             const int t = tabFromText(popOut);
@@ -644,6 +734,7 @@ static void fill(NSStackView *stack, NSView *view)
     [_tick invalidate];
     if (_keyMonitor) [NSEvent removeMonitor:_keyMonitor];
     free(_viewFb);
+    free(_viewDraw);
 }
 
 - (void)windowWillClose:(NSNotification *)note
@@ -908,12 +999,36 @@ static void fill(NSStackView *stack, NSView *view)
     _viewNote = [self hint:@""];
     NSStackView *bar = hstack(@[[self label:@"Page"], _viewPick, _viewNote]);
 
-    _viewPic = [self pixelView:APPLE2VIEW_WIDTH * VIDEO_ZOOM height:APPLE2VIEW_HEIGHT * VIDEO_ZOOM];
+    _viewPic = [[VideoPicView alloc] init];
+    _viewPic.imageScaling = NSImageScaleAxesIndependently;
+    _viewPic.wantsLayer = YES;
+    _viewPic.layer.magnificationFilter = kCAFilterNearest;
+    [_viewPic.widthAnchor constraintEqualToConstant:APPLE2VIEW_WIDTH * VIDEO_ZOOM].active = YES;
+    [_viewPic.heightAnchor constraintEqualToConstant:APPLE2VIEW_HEIGHT * VIDEO_ZOOM].active = YES;
     _viewPic.layer.backgroundColor = NSColor.blackColor.CGColor;
+    __weak DebuggerWindow *weakSelf = self;
+    _viewPic.onHover = ^(int x, int y) { [weakSelf videoHoverX:x y:y]; };
+    _viewPic.onClick = ^(int x, int y, NSInteger clicks) { [weakSelf videoClickX:x y:y clicks:clicks]; };
+
+    /* beside the picture: what is under the mouse, the pinned byte, buttons */
+    _viewHover = [self label:@"Hover the picture to inspect it"];
+    _viewHover.font = monoFont();
+    _viewHover.textColor = NSColor.secondaryLabelColor;
+    _viewPinned = [self label:@""];
+    _viewPinned.font = monoFont();
+    _viewStatus = [self hint:@"Click pins a byte, double-click breaks on writes to it"];
+    NSStackView *buttons = hstack(@[ [self button:@"Show in Memory" action:@selector(videoShowInMemory:)],
+                                     [self button:@"Unpin" action:@selector(videoUnpin:)] ]);
+    NSStackView *side = vstack(@[ _viewHover, _viewPinned, buttons, _viewStatus ]);
+    side.spacing = 10;
+    [side.widthAnchor constraintEqualToConstant:340].active = YES;
+    NSStackView *row = hstack(@[ _viewPic, side ]);
+    row.alignment = NSLayoutAttributeTop;
+    row.spacing = 12;
 
     /* the page is the scroll view's document, pinned to its top left; its
      * own size is what its views ask for */
-    NSStackView *page = vstack(@[ bar, _viewPic ]);
+    NSStackView *page = vstack(@[ bar, row ]);
     page.spacing = 12;
     page.translatesAutoresizingMaskIntoConstraints = NO;
     NSScrollView *outer = [[NSScrollView alloc] init];
@@ -1935,6 +2050,8 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
 - (void)viewPickChanged:(id)sender
 {
     (void)sender;
+    _pin.valid = 0;     /* another page: the pinned point means something else */
+    _hov.valid = 0;
     [self refreshVideo];
 }
 
@@ -1948,8 +2065,116 @@ static NSTextField *bpCell(NSString *text, CGFloat width, BOOL bold)
     }
     _viewNote.stringValue = [NSString stringWithFormat:@"decoded from $%04X, as the CPU sees memory now",
                              apple2debug_view_base((apple2debug_view)sel)];
-    NSImage *img = imageFromXRGB(_viewFb, APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT, APPLE2VIEW_WIDTH);
+    /* the pin and the hover are read again: their bytes change as the machine runs */
+    if (_pin.valid &&
+        (apple2debug_view_inspect(_dbg, (apple2debug_view)sel, _pinX, _pinY, &_pin) != 0 || !_pin.valid))
+        _pin.valid = 0;
+    if (_hov.valid &&
+        (apple2debug_view_inspect(_dbg, (apple2debug_view)sel, _hovX, _hovY, &_hov) != 0 || !_hov.valid))
+        _hov.valid = 0;
+    [self redrawVideo];
+}
+
+/* The cached page with the outlines drawn in (pin yellow, hover white), as
+ * the picture, and the two labels. No re-render: a mouse move calls this. */
+- (void)redrawVideo
+{
+    if (!_viewFb || !_viewDraw || !_viewPic) return;
+    memcpy(_viewDraw, _viewFb, (size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT * sizeof(uint32_t));
+    if (_pin.valid) outlineRect(_viewDraw, _pin.rx, _pin.ry, _pin.rw, _pin.rh, 0x00FFE000);
+    if (_hov.valid) outlineRect(_viewDraw, _hov.rx, _hov.ry, _hov.rw, _hov.rh, 0x00FFFFFF);
+    NSImage *img = imageFromXRGB(_viewDraw, APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT, APPLE2VIEW_WIDTH);
     if (img) _viewPic.image = img;
+    _viewHover.stringValue = _hov.valid ? cstr(_hov.text)
+                                        : @"Hover the picture to inspect it";
+    _viewPinned.stringValue = _pin.valid
+        ? [NSString stringWithFormat:@"Pinned:\n%@", cstr(_pin.text)]
+        : @"";
+}
+
+- (void)videoHoverX:(int)x y:(int)y
+{
+    const NSInteger sel = _viewPick.indexOfSelectedItem;
+    if (x < 0 || sel < 0 ||
+        apple2debug_view_inspect(_dbg, (apple2debug_view)sel, x, y, &_hov) != 0 || !_hov.valid) {
+        if (!_hov.valid && x < 0) return;       /* nothing changes */
+        _hov.valid = 0;
+    } else {
+        _hovX = x;
+        _hovY = y;
+    }
+    [self redrawVideo];
+}
+
+- (void)videoClickX:(int)x y:(int)y clicks:(NSInteger)clicks
+{
+    const NSInteger sel = _viewPick.indexOfSelectedItem;
+    apple2debug_pixel px;
+    if (sel < 0 || apple2debug_view_inspect(_dbg, (apple2debug_view)sel, x, y, &px) != 0 || !px.valid) return;
+    const BOOL same = _pin.valid && px.rx == _pin.rx && px.ry == _pin.ry && px.rw == _pin.rw && px.rh == _pin.rh;
+    _hov = px;
+    _hovX = x;
+    _hovY = y;
+    if (clicks >= 2) {
+        /* the first click of a double already toggled the pin: keep it pinned */
+        if (!same) {
+            _pin = px;
+            _pinX = x;
+            _pinY = y;
+        }
+        [self videoBreakOnWrites:px.addr];
+    } else if (same) {
+        _pin.valid = 0;
+    } else {
+        _pin = px;
+        _pinX = x;
+        _pinY = y;
+    }
+    [self redrawVideo];
+}
+
+/* A write breakpoint on one byte, unless an enabled unconditional one is there. */
+- (void)videoBreakOnWrites:(uint16_t)addr
+{
+    static apple2debug_breakpoint bps[MAX_BPS];
+    int n = apple2debug_breakpoint_list(_dbg, bps, MAX_BPS);
+    if (n < 0) n = 0;
+    if (n > MAX_BPS) n = MAX_BPS;
+    BOOL have = NO;
+    for (int i = 0; i < n; i++)
+        if (bps[i].enabled && bps[i].type == APPLE2DEBUG_BP_WRITE && bps[i].start == addr && bps[i].end == addr &&
+            bps[i].condition[0] == '\0')
+            have = YES;
+    if (!have) {
+        char err[256];
+        err[0] = '\0';
+        if (apple2debug_breakpoint_add(_dbg, APPLE2DEBUG_BP_WRITE, addr, addr, "", err, (int)sizeof err) < 0) {
+            NSString *e = cstr(err);
+            _viewStatus.stringValue = e.length ? e : @"The breakpoint was refused";
+            return;
+        }
+    }
+    _viewStatus.stringValue = [NSString stringWithFormat:@"Break on writes to $%04X", addr];
+}
+
+- (void)videoShowInMemory:(id)sender
+{
+    (void)sender;
+    const apple2debug_pixel *px = _pin.valid ? &_pin : (_hov.valid ? &_hov : NULL);
+    if (!px) {
+        _viewStatus.stringValue = @"Pin or hover a byte first";
+        return;
+    }
+    const int addr = px->addr;
+    [self showTab:TAB_MEMORY];
+    [self showMemLo:addr hi:addr];
+}
+
+- (void)videoUnpin:(id)sender
+{
+    (void)sender;
+    _pin.valid = 0;
+    [self redrawVideo];
 }
 
 - (void)refreshBps

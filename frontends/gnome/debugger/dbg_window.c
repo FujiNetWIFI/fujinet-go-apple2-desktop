@@ -116,7 +116,14 @@ typedef struct {
     GtkDropDown *view_pick;
     GtkPicture *view_pic;
     uint32_t *view_fb, *view_last;
+    uint32_t *view_mark, *view_big;   /* last + outlines; and that scaled 2x */
     gboolean have_view;
+    GtkLabel *vi_hover, *vi_pin, *vi_status;
+    gboolean hov_on, pin_on;
+    int hov_x, hov_y, pin_x, pin_y;        /* picture coords of the probe */
+    apple2debug_pixel hov, pin;
+    int hov_addr;                          /* last hovered byte, -1 none */
+    int drawn_hov[4], drawn_pin[4];        /* outlines in the shown texture */
 
     /* breakpoints */
     GtkListBox *bp_list;
@@ -607,35 +614,206 @@ static void refresh_disasm(DbgWin *w)
     }
 }
 
-/* Decode whichever video page the dropdown names. This shows a PAGE as the CPU
- * sees it, not what the machine is displaying -- which is the point: it is how
- * you see the buffer a program is drawing into before it flips to it. Redrawn
- * only when the decoded pixels changed. */
-static void refresh_video(DbgWin *w)
+#define VIEW_ZOOM 2
+
+static void show_in_memory(DbgWin *w, int lo, int hi);
+static void show_tab(DbgWin *w, int tab);
+
+static void outline(uint32_t *fb, const int *r, uint32_t colour)
+{
+    int x, y;
+    for (x = r[0]; x < r[0] + r[2]; x++) {
+        if (x < 0 || x >= APPLE2VIEW_WIDTH) continue;
+        if (r[1] >= 0 && r[1] < APPLE2VIEW_HEIGHT) fb[r[1] * APPLE2VIEW_WIDTH + x] = colour;
+        y = r[1] + r[3] - 1;
+        if (y >= 0 && y < APPLE2VIEW_HEIGHT) fb[y * APPLE2VIEW_WIDTH + x] = colour;
+    }
+    for (y = r[1]; y < r[1] + r[3]; y++) {
+        if (y < 0 || y >= APPLE2VIEW_HEIGHT) continue;
+        if (r[0] >= 0 && r[0] < APPLE2VIEW_WIDTH) fb[y * APPLE2VIEW_WIDTH + r[0]] = colour;
+        x = r[0] + r[2] - 1;
+        if (x >= 0 && x < APPLE2VIEW_WIDTH) fb[y * APPLE2VIEW_WIDTH + x] = colour;
+    }
+}
+
+static void rect_of(const apple2debug_pixel *p, gboolean on, int *r)
+{
+    r[0] = on ? p->rx : 0; r[1] = on ? p->ry : 0;
+    r[2] = on ? p->rw : 0; r[3] = on ? p->rh : 0;
+}
+
+/* The cached page with the pin (yellow) and hover (white) outlines, scaled by
+ * whole pixels so it stays crisp, and shown. */
+static void present_video(DbgWin *w)
 {
     GdkTexture *tex;
     GBytes *bytes;
-    guint sel = gtk_drop_down_get_selected(w->view_pick);
-    const gsize size = (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT * sizeof(uint32_t);
+    const int bw = APPLE2VIEW_WIDTH * VIEW_ZOOM, bh = APPLE2VIEW_HEIGHT * VIEW_ZOOM;
+    int x, y;
 
-    if (sel == GTK_INVALID_LIST_POSITION) sel = 0;
-    if (apple2debug_render_view(w->dbg, (apple2debug_view)sel, w->view_fb) != 0) return;
-    if (w->have_view && memcmp(w->view_fb, w->view_last, size) == 0) return;
-    memcpy(w->view_last, w->view_fb, size);
-    w->have_view = TRUE;
+    memcpy(w->view_mark, w->view_last,
+           (size_t)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT * sizeof(uint32_t));
+    rect_of(&w->pin, w->pin_on && w->pin.valid, w->drawn_pin);
+    rect_of(&w->hov, w->hov_on && w->hov.valid, w->drawn_hov);
+    if (w->drawn_pin[2] > 0) outline(w->view_mark, w->drawn_pin, 0x00FFEB3Bu);
+    if (w->drawn_hov[2] > 0) outline(w->view_mark, w->drawn_hov, 0x00FFFFFFu);
+    for (y = 0; y < bh; y++) {
+        const uint32_t *src = w->view_mark + (y / VIEW_ZOOM) * APPLE2VIEW_WIDTH;
+        uint32_t *dst = w->view_big + (size_t)y * bw;
+        for (x = 0; x < bw; x++) dst[x] = src[x / VIEW_ZOOM];
+    }
+    bytes = g_bytes_new(w->view_big, (gsize)bw * bh * sizeof(uint32_t));
     /* the engine's XRGB8888 is a uint32 0x00RRGGBB: B,G,R,X in memory on a
      * little-endian host, which is GDK_MEMORY_B8G8R8X8 with no conversion */
-    bytes = g_bytes_new(w->view_fb, size);
 #if G_BYTE_ORDER == G_BIG_ENDIAN
-    tex = gdk_memory_texture_new(APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT, GDK_MEMORY_X8R8G8B8,
-                                 bytes, (gsize)APPLE2VIEW_WIDTH * sizeof(uint32_t));
+    tex = gdk_memory_texture_new(bw, bh, GDK_MEMORY_X8R8G8B8, bytes, (gsize)bw * sizeof(uint32_t));
 #else
-    tex = gdk_memory_texture_new(APPLE2VIEW_WIDTH, APPLE2VIEW_HEIGHT, GDK_MEMORY_B8G8R8X8,
-                                 bytes, (gsize)APPLE2VIEW_WIDTH * sizeof(uint32_t));
+    tex = gdk_memory_texture_new(bw, bh, GDK_MEMORY_B8G8R8X8, bytes, (gsize)bw * sizeof(uint32_t));
 #endif
     g_bytes_unref(bytes);
     gtk_picture_set_paintable(w->view_pic, GDK_PAINTABLE(tex));
     g_object_unref(tex);
+}
+
+static apple2debug_view current_view(DbgWin *w)
+{
+    guint sel = gtk_drop_down_get_selected(w->view_pick);
+    return (apple2debug_view)(sel == GTK_INVALID_LIST_POSITION ? 0 : sel);
+}
+
+static void set_vi_label(GtkLabel *l, const char *head, const apple2debug_pixel *p, gboolean on)
+{
+    if (!on || !p->valid) {
+        gtk_label_set_text(l, head);
+        return;
+    }
+    char *t = g_strdup_printf("%s\n%s", head, p->text);
+    gtk_label_set_text(l, t);
+    g_free(t);
+}
+
+/* Re-read the probes (the pin live) and redraw if an outline moved. Returns
+ * TRUE when the picture needs presenting. */
+static gboolean update_probes(DbgWin *w)
+{
+    int h[4], p[4];
+    apple2debug_view v = current_view(w);
+
+    if (w->pin_on && apple2debug_view_inspect(w->dbg, v, w->pin_x, w->pin_y, &w->pin) != 0)
+        w->pin.valid = 0;
+    set_vi_label(w->vi_pin, "Pinned", &w->pin, w->pin_on);
+    if (!w->pin_on) gtk_label_set_text(w->vi_pin, "Pinned: click the picture");
+    if (w->hov_on) {
+        if (apple2debug_view_inspect(w->dbg, v, w->hov_x, w->hov_y, &w->hov) != 0)
+            w->hov.valid = 0;
+        if (w->hov.valid) w->hov_addr = w->hov.addr;
+    }
+    set_vi_label(w->vi_hover, "Under the pointer", &w->hov, w->hov_on);
+    rect_of(&w->pin, w->pin_on && w->pin.valid, p);
+    rect_of(&w->hov, w->hov_on && w->hov.valid, h);
+    return memcmp(h, w->drawn_hov, sizeof h) != 0 || memcmp(p, w->drawn_pin, sizeof p) != 0;
+}
+
+/* Decode whichever video page the dropdown names. This shows a PAGE as the CPU
+ * sees it, not what the machine is displaying -- which is the point: it is how
+ * you see the buffer a program is drawing into before it flips to it. Redrawn
+ * only when the decoded pixels or an outline changed. */
+static void refresh_video(DbgWin *w)
+{
+    const gsize size = (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT * sizeof(uint32_t);
+    gboolean changed = FALSE;
+
+    if (apple2debug_render_view(w->dbg, current_view(w), w->view_fb) != 0) return;
+    if (!w->have_view || memcmp(w->view_fb, w->view_last, size) != 0) {
+        memcpy(w->view_last, w->view_fb, size);
+        w->have_view = TRUE;
+        changed = TRUE;
+    }
+    if (update_probes(w)) changed = TRUE;
+    if (changed) present_video(w);
+}
+
+static void view_probe(DbgWin *w, gboolean hover, int x, int y)
+{
+    if (hover) { w->hov_on = TRUE; w->hov_x = x; w->hov_y = y; }
+    else { w->pin_on = TRUE; w->pin_x = x; w->pin_y = y; }
+    if (w->have_view && update_probes(w)) present_video(w);
+}
+
+static void on_vid_motion(GtkEventControllerMotion *c, double x, double y, gpointer ud)
+{
+    DbgWin *w = ud;
+    (void)c;
+    view_probe(w, TRUE, (int)(x / VIEW_ZOOM), (int)(y / VIEW_ZOOM));
+}
+
+static void on_vid_leave(GtkEventControllerMotion *c, gpointer ud)
+{
+    DbgWin *w = ud;
+    (void)c;
+    w->hov_on = FALSE;
+    if (w->have_view && update_probes(w)) present_video(w);
+}
+
+static void unpin_video(DbgWin *w)
+{
+    w->pin_on = FALSE;
+    if (w->have_view && update_probes(w)) present_video(w);
+}
+
+static void on_vid_unpin(GtkButton *b, gpointer ud)
+{
+    (void)b;
+    unpin_video(ud);
+}
+
+static void on_vid_click(GtkGestureClick *g, int n, double dx, double dy, gpointer ud)
+{
+    DbgWin *w = ud;
+    int x = (int)(dx / VIEW_ZOOM), y = (int)(dy / VIEW_ZOOM);
+    apple2debug_pixel here;
+    (void)g;
+
+    if (apple2debug_view_inspect(w->dbg, current_view(w), x, y, &here) != 0 || !here.valid) return;
+    if (n == 1) {
+        gboolean same = w->pin_on && w->pin.valid && w->pin.addr == here.addr &&
+                        w->pin.rx == here.rx && w->pin.ry == here.ry;
+        if (same) unpin_video(w);
+        else view_probe(w, FALSE, x, y);
+    } else if (n == 2) {
+        apple2debug_breakpoint bps[256];
+        char err[160] = "";
+        int i, cnt = apple2debug_breakpoint_list(w->dbg, bps, 256), found = 0;
+        char *msg;
+
+        view_probe(w, FALSE, x, y);    /* the first click's toggle may have undone it */
+        for (i = 0; i < cnt; i++)
+            if (bps[i].enabled && bps[i].type == APPLE2DEBUG_BP_WRITE &&
+                bps[i].start == here.addr && bps[i].end == here.addr && !bps[i].condition[0])
+                found = 1;
+        if (!found &&
+            apple2debug_breakpoint_add(w->dbg, APPLE2DEBUG_BP_WRITE, here.addr, here.addr, "",
+                                       err, sizeof err) < 0) {
+            gtk_label_set_text(w->vi_status, err);
+            return;
+        }
+        msg = g_strdup_printf("Break on writes to $%04X", here.addr);
+        gtk_label_set_text(w->vi_status, msg);
+        g_free(msg);
+    }
+}
+
+static void on_vid_memory(GtkButton *b, gpointer ud)
+{
+    DbgWin *w = ud;
+    int addr = (w->pin_on && w->pin.valid) ? w->pin.addr : w->hov_addr;
+    (void)b;
+    if (addr < 0) {
+        gtk_label_set_text(w->vi_status, "Point at the picture first");
+        return;
+    }
+    show_in_memory(w, addr, addr);
+    show_tab(w, TAB_MEMORY);
 }
 
 static void grid_cell(GtkGrid *g, int col, int row, const char *text, gboolean head)
@@ -2144,6 +2322,8 @@ static void on_view_changed(GObject *o, GParamSpec *p, gpointer ud)
     DbgWin *w = ud;
     (void)o; (void)p;
     w->have_view = FALSE;
+    w->pin_on = FALSE;
+    w->hov_on = FALSE;
     if (!w->closing) refresh_video(w);
 }
 
@@ -2164,17 +2344,72 @@ static GtkWidget *build_video(DbgWin *w)
     g_signal_connect(w->view_pick, "notify::selected", G_CALLBACK(on_view_changed), w);
     w->view_fb = g_new0(uint32_t, (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT);
     w->view_last = g_new0(uint32_t, (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT);
+    w->view_mark = g_new0(uint32_t, (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT);
+    w->view_big = g_new0(uint32_t, (gsize)APPLE2VIEW_WIDTH * APPLE2VIEW_HEIGHT * VIEW_ZOOM * VIEW_ZOOM);
+    w->hov_addr = -1;
+    /* a fixed-size picture showing a texture already scaled by whole pixels,
+     * so widget coordinates map exactly (divide by VIEW_ZOOM) and stay crisp */
     w->view_pic = GTK_PICTURE(gtk_picture_new());
-    gtk_picture_set_content_fit(w->view_pic, GTK_CONTENT_FIT_CONTAIN);
-    gtk_widget_set_size_request(GTK_WIDGET(w->view_pic), APPLE2VIEW_WIDTH * 2, APPLE2VIEW_HEIGHT * 2);
+    gtk_picture_set_content_fit(w->view_pic, GTK_CONTENT_FIT_FILL);
+    gtk_picture_set_can_shrink(w->view_pic, FALSE);
+    gtk_widget_set_size_request(GTK_WIDGET(w->view_pic), APPLE2VIEW_WIDTH * VIEW_ZOOM,
+                                APPLE2VIEW_HEIGHT * VIEW_ZOOM);
     gtk_widget_set_halign(GTK_WIDGET(w->view_pic), GTK_ALIGN_START);
+    gtk_widget_set_valign(GTK_WIDGET(w->view_pic), GTK_ALIGN_START);
+    {
+        GtkEventController *motion = gtk_event_controller_motion_new();
+        GtkGesture *click = gtk_gesture_click_new();
+        g_signal_connect(motion, "motion", G_CALLBACK(on_vid_motion), w);
+        g_signal_connect(motion, "leave", G_CALLBACK(on_vid_leave), w);
+        gtk_widget_add_controller(GTK_WIDGET(w->view_pic), motion);
+        g_signal_connect(click, "pressed", G_CALLBACK(on_vid_click), w);
+        gtk_widget_add_controller(GTK_WIDGET(w->view_pic), GTK_EVENT_CONTROLLER(click));
+    }
     gtk_widget_add_css_class(hint, "dim-label");
     gtk_label_set_xalign(GTK_LABEL(hint), 0);
     gtk_label_set_wrap(GTK_LABEL(hint), TRUE);
     gtk_box_append(GTK_BOX(row), gtk_label_new("View"));
     gtk_box_append(GTK_BOX(row), GTK_WIDGET(w->view_pick));
     gtk_box_append(GTK_BOX(box), row);
-    gtk_box_append(GTK_BOX(box), GTK_WIDGET(w->view_pic));
+    {
+        GtkWidget *main = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        GtkWidget *side = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+        GtkWidget *btns = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        GtkWidget *mem = gtk_button_new_with_label("Show in Memory");
+        GtkWidget *unpin = gtk_button_new_with_label("Unpin");
+        GtkLabel **ls[3] = { &w->vi_hover, &w->vi_pin, &w->vi_status };
+        const char *init[3] = { "Under the pointer", "Pinned: click the picture", "" };
+        int k;
+
+        for (k = 0; k < 3; k++) {
+            *ls[k] = GTK_LABEL(gtk_label_new(init[k]));
+            gtk_label_set_xalign(*ls[k], 0);
+            gtk_label_set_yalign(*ls[k], 0);
+            if (k < 2) {
+                gtk_widget_add_css_class(GTK_WIDGET(*ls[k]), "monospace");
+                gtk_label_set_selectable(*ls[k], TRUE);
+            } else {
+                gtk_widget_add_css_class(GTK_WIDGET(*ls[k]), "apple2-accent-text");
+            }
+        }
+        gtk_widget_set_tooltip_text(mem, "Show the pinned byte (else the hovered one) in the Memory tab");
+        gtk_widget_set_tooltip_text(unpin, "Drop the pin");
+        g_signal_connect(mem, "clicked", G_CALLBACK(on_vid_memory), w);
+        g_signal_connect(unpin, "clicked", G_CALLBACK(on_vid_unpin), w);
+        gtk_box_append(GTK_BOX(btns), mem);
+        gtk_box_append(GTK_BOX(btns), unpin);
+        gtk_box_append(GTK_BOX(side), btns);
+        gtk_box_append(GTK_BOX(side), GTK_WIDGET(w->vi_hover));
+        gtk_box_append(GTK_BOX(side), GTK_WIDGET(w->vi_pin));
+        gtk_box_append(GTK_BOX(side), GTK_WIDGET(w->vi_status));
+        gtk_widget_set_hexpand(side, TRUE);
+        gtk_box_append(GTK_BOX(main), GTK_WIDGET(w->view_pic));
+        gtk_box_append(GTK_BOX(main), side);
+        gtk_box_append(GTK_BOX(box), main);
+    }
+    gtk_label_set_text(GTK_LABEL(hint), "The page as the CPU sees it now, not what the screen is "
+                       "showing: find the buffer a program draws into. Hover to inspect, click "
+                       "to pin, double-click to break on writes.");
     gtk_box_append(GTK_BOX(box), hint);
     return padded(box);
 }
@@ -2383,6 +2618,8 @@ static void on_win_finalized(gpointer data, GObject *where)
     if (w->map_sig) g_string_free(w->map_sig, TRUE);
     g_free(w->view_fb);
     g_free(w->view_last);
+    g_free(w->view_mark);
+    g_free(w->view_big);
     g_free(w);
 }
 
@@ -2517,6 +2754,14 @@ void apple2_debugger_show(GtkWindow *parent, apple2session *session)
             int idx = atoi(vw);
             if (idx >= 0 && idx < APPLE2VIEW_COUNT)
                 gtk_drop_down_set_selected(w->view_pick, (guint)idx);
+        }
+        {
+            const char *vp = g_getenv("APPLE2_VIDEO_PIN");
+            int px, py;
+            if (vp && sscanf(vp, "%d,%d", &px, &py) == 2) {
+                refresh_video(w);
+                view_probe(w, FALSE, px, py);
+            }
         }
     }
     attach_and_refresh(w);
