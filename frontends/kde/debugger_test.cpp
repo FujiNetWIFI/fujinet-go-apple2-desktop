@@ -1178,7 +1178,9 @@ private slots:
         QTest::mouseClick(unpin, Qt::LeftButton);
         QTest::mouseMove(pic, away - QPoint(28, 0));
         QTest::mouseMove(pic, away);
-        QTRY_VERIFY_WITH_TIMEOUT(!pixel->text().contains(QLatin1String("0503")), 1000);
+        /* the pin is gone (the label may still show the hovered byte, which
+         * is the same one if the pointer's move was not delivered) */
+        QTRY_VERIFY_WITH_TIMEOUT(!hasColour(pic->grab().toImage(), 82, 86, 40, 255, 217, 26), 1000);
         apple2debug_breakpoint_clear(m_d);
         pickText(vw<QComboBox>("videoZoom"), QStringLiteral("1×"));
         m_tabs->setCurrentIndex(0);
