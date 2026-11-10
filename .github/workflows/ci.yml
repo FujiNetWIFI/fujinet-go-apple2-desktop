@@ -36,6 +36,7 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  workflow_dispatch:
 
 jobs:
   # An Arch container, not ubuntu: the frontends need Qt >= 6.7 (QRhiWidget,
@@ -45,7 +46,7 @@ jobs:
   # having built nothing. The release packages are built on ubuntu-26.04
   # (linux-packages below), which has what they need and dpkg-deb.
   linux:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, fujinet-builder]
     container: archlinux:latest
     env:
       LD_LIBRARY_PATH: /usr/local/lib
@@ -137,21 +138,32 @@ jobs:
     # (26.04 has Qt 6.10 and GTK 4.22; 24.04 has 6.4 and 4.14, and CMake would
     # refuse the frontend named below). The .deb/.rpm therefore need a distro
     # at least that new.
-    runs-on: ubuntu-26.04
+    runs-on: [self-hosted, Linux, X64, fujinet-builder]
+    container:
+      image: ubuntu:26.04
+      options: --add-host=host.docker.internal:host-gateway
     steps:
-      - uses: actions/checkout@v5
       - name: Install toolkit dependencies
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build libgtk-4-dev libadwaita-1-dev \
+          MIRROR=http://mirrors.edge.kernel.org/ubuntu
+          (echo > /dev/tcp/host.docker.internal/3142) 2>/dev/null \
+            && MIRROR=http://host.docker.internal:3142/mirrors.edge.kernel.org/ubuntu
+          sed -i "s|http://[a-z.]*ubuntu.com/ubuntu|$MIRROR|" /etc/apt/sources.list.d/ubuntu.sources
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake git curl \
+            ca-certificates python3 pkg-config ninja-build libgtk-4-dev libadwaita-1-dev \
             libwebkitgtk-6.0-dev qt6-base-dev qt6-base-private-dev \
             qt6-shadertools-dev qt6-webengine-dev \
             libssl-dev libexpat1-dev zlib1g-dev libkrb5-dev libgnutls28-dev \
             libboost-dev python3-venv python3-yaml python3-jinja2 \
             desktop-file-utils dpkg-dev rpm file
+      - uses: actions/checkout@v5
+      - name: Mark the workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install SDL3 build dependencies
         run: |
-          sudo apt-get install -y libx11-dev libxext-dev libxcursor-dev \
+          apt-get install -y libx11-dev libxext-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxrandr-dev libxss-dev libxtst-dev \
             libxkbcommon-dev libwayland-dev libdecor-0-dev libasound2-dev \
             libpulse-dev libudev-dev libdbus-1-dev
@@ -162,7 +174,7 @@ jobs:
           cmake -S sdl3-src -B sdl3-src/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF
           cmake --build sdl3-src/build
-          sudo cmake --install sdl3-src/build
+          cmake --install sdl3-src/build
       - name: Configure
         run: |
           cmake -B build -G Ninja \
@@ -194,6 +206,10 @@ jobs:
     runs-on: [self-hosted, macOS, X64, tahoe]
     env:
       CMAKE_OSX_ARCHITECTURES: "arm64;x86_64"
+      # Apple clang 26 rejects libssh's -fstack-clash-protection, and the
+      # FujiNet firmware builds with -Werror.
+      CFLAGS: -Wno-error=unused-command-line-argument
+      CXXFLAGS: -Wno-error=unused-command-line-argument
     steps:
       - uses: actions/checkout@v5
       # The runner has no Homebrew: only the base macOS tools (clang, make,
@@ -331,68 +347,85 @@ jobs:
         run: |
           ditto -c -k --keepParent \
             "build/frontends/macos/FujiNet Go Apple II.app" \
-            FujiNet-Go-Apple2-macos.zip
+            FujiNet-Go-Apple2-macos-universal.zip
       - name: Upload app bundle
         uses: actions/upload-artifact@v5
         with:
-          name: FujiNet-Go-Apple2-macos
-          path: FujiNet-Go-Apple2-macos.zip
+          name: FujiNet-Go-Apple2-macos-universal
+          path: FujiNet-Go-Apple2-macos-universal.zip
 
+  # Cross-built with MinGW-w64 in an ubuntu:24.04 container on the org's
+  # self-hosted runners and tested under Wine (there is no Windows runner).
+  # .github/workflows/mingw-deps.sh builds the pinned static dependencies
+  # (zlib, expat, MbedTLS, OpenSSL and SDL3) and writes the toolchain file;
+  # Boost, used only as headers, is the pinned release tarball.
+  #
+  # Required, not advisory. Neither AppleWin's libretro frontend nor
+  # FujiNet's IWM device tree had ever been compiled for MinGW before this
+  # repository did it; now that they build and pass, a regression here is a
+  # real regression and should fail the branch.
   windows:
-    runs-on: windows-latest
-    # Required, not advisory. Neither AppleWin's libretro frontend nor
-    # FujiNet's IWM device tree had ever been compiled for MinGW before this
-    # repository did it; now that they build and pass, a regression here is a
-    # real regression and should fail the branch.
-    defaults:
-      run:
-        shell: msys2 {0}
+    runs-on: [self-hosted, Linux, X64, fujinet-builder]
+    container:
+      image: ubuntu:24.04
+      options: --add-host=host.docker.internal:host-gateway
+    env:
+      WINEPREFIX: /tmp/wine
+      WINEDEBUG: -all
     steps:
-      - uses: actions/checkout@v5
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: UCRT64
-          update: true
-          install: >-
-            git
-            make
-            diffutils
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-python
-            mingw-w64-ucrt-x86_64-python-yaml
-            mingw-w64-ucrt-x86_64-python-jinja
-            mingw-w64-ucrt-x86_64-mbedtls
-            mingw-w64-ucrt-x86_64-openssl
-            mingw-w64-ucrt-x86_64-expat
-            mingw-w64-ucrt-x86_64-zlib
-            mingw-w64-ucrt-x86_64-boost
-            mingw-w64-ucrt-x86_64-nsis
-      # Static SDL3 (as on macOS) so nothing shipped needs a loose DLL --
-      # not even SDL3.dll or the MinGW runtime.
-      - name: Build and install static SDL3
+      - name: Install build tools, MinGW-w64, Wine and NSIS
+        shell: bash
         run: |
-          git clone --depth 1 --branch release-3.4.12 \
-            https://github.com/libsdl-org/SDL.git sdl3-src
-          cmake -S sdl3-src -B sdl3-src/build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=OFF -DSDL_STATIC=ON \
-            -DSDL_TEST_LIBRARY=OFF \
-            -DCMAKE_INSTALL_PREFIX=/ucrt64
-          cmake --build sdl3-src/build
-          cmake --install sdl3-src/build
-      # This is the job with the real portability risk: neither AppleWin's
-      # libretro frontend nor FujiNet's IWM device tree (lib/device/iwm,
-      # lib/bus/iwm) had ever been built under MinGW before this repository
-      # did it. Before reaching here, Windows changes are cross-compiled with
-      # cmake/toolchains/mingw-w64.cmake and smoke-tested under wine.
-      #
-      # ROMs embedded on purpose: this job's output is uploaded and then
-      # attached to releases, and should boot out of the box the way
-      # AppleWin itself has for over a decade of constant use. See
-      # COMPLIANCE.md.
+          MIRROR=http://mirrors.edge.kernel.org/ubuntu
+          (echo > /dev/tcp/host.docker.internal/3142) 2>/dev/null \
+            && MIRROR=http://host.docker.internal:3142/mirrors.edge.kernel.org/ubuntu
+          sed -i "s|http://[a-z.]*ubuntu.com/ubuntu|$MIRROR|" /etc/apt/sources.list.d/ubuntu.sources
+          apt-get update
+          apt-get install -y --no-install-recommends git curl ca-certificates \
+            build-essential make diffutils python3 python3-pip python3-venv \
+            python3-jinja2 python3-yaml cmake ninja-build pkg-config mingw-w64 \
+            wine wine64 xz-utils bzip2 perl nsis
+      - uses: actions/checkout@v5
+      - name: Mark the workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Cache MinGW dependencies
+        id: mingw-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/mingw
+          key: mingw-deps-${{ hashFiles('.github/workflows/mingw-deps.sh') }}
+      - name: Build MinGW dependencies
+        if: steps.mingw-cache.outputs.cache-hit != 'true'
+        run: .github/workflows/mingw-deps.sh "$RUNNER_TEMP/mingw"
+      # Boost is only ever used as headers: the release tarball is unpacked
+      # and handed to the build as APPLE2_BOOST_INCLUDE_DIR.
+      - name: Cache Boost headers
+        id: boost-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/boost
+          key: boost-1.87.0
+      - name: Fetch Boost headers (1.87.0, pinned checksum)
+        if: steps.boost-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/boost"
+          curl -fsSL -o /tmp/boost.tar.gz https://archives.boost.io/release/1.87.0/source/boost_1_87_0.tar.gz
+          echo "f55c340aa49763b1925ccf02b2e83f35fdcf634c9d5164a2acb87540173c741d  /tmp/boost.tar.gz" | sha256sum -c -
+          tar -xz -C "$RUNNER_TEMP/boost" --strip-components=1 -f /tmp/boost.tar.gz
+      # The runtime's own build takes its toolchain from FUJINET_CMAKE_ARGS
+      # (word-split: no spaces inside a value); GCC rejects two things clang
+      # let through.
       - name: Configure
-        run: cmake -B build -G Ninja -DFRONTEND=windows -DWITH_APPLE_ROMS=ON
+        run: |
+          P="$RUNNER_TEMP/mingw"
+          echo "MBEDTLS_ROOT_DIR=$P" >> "$GITHUB_ENV"
+          echo "FUJINET_CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$P/toolchain.cmake -DCMAKE_PREFIX_PATH=$P -DCMAKE_CROSSCOMPILING_EMULATOR=wine -DCMAKE_C_FLAGS=-Wno-error=stringop-truncation -DCMAKE_CXX_FLAGS=-Wno-error=conversion-null" >> "$GITHUB_ENV"
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$P/toolchain.cmake" \
+            -DCMAKE_PREFIX_PATH="$P" \
+            -DCMAKE_CROSSCOMPILING_EMULATOR=wine \
+            -DFRONTEND=windows -DWITH_APPLE_ROMS=ON \
+            -DAPPLE2_BOOST_INCLUDE_DIR="$RUNNER_TEMP/boost"
       - name: Build
         run: cmake --build build
       - name: Test
@@ -401,14 +434,11 @@ jobs:
         run: |
           DLL=tools/fujinet/work/out/fujinet.dll
           test -f "$DLL" || { echo "::error::$DLL missing"; exit 1; }
-          objdump -p "$DLL" | grep -q fujinet_desktop_start_runtime \
+          x86_64-w64-mingw32-objdump -p "$DLL" | grep -q fujinet_desktop_start_runtime \
             || { echo "::error::entry points not exported"; exit 1; }
-      # Checked by IMPORT TABLE rather than by ldd: ldd resolves against the
-      # build machine's PATH, where the MSYS copies exist, so it reports a
-      # dependency as satisfied that the target will not have. On the ADAM
-      # target fujinet.dll shipped importing libcrypto-3-x64.dll and zlib1.dll
-      # exactly this way -- the exe launched, LoadLibrary failed, and the
-      # machine quietly ran with no FujiNet and no error anyone could see.
+      # Checked by IMPORT TABLE: on the ADAM target fujinet.dll once shipped
+      # importing libcrypto-3-x64.dll and zlib1.dll -- the exe launched,
+      # LoadLibrary failed, and the machine quietly ran with no FujiNet.
       - name: Verify the shipped binaries are self-contained
         run: |
           fail=0
@@ -416,7 +446,7 @@ jobs:
                      tools/fujinet/work/out/fujinet.dll; do
             test -f "$bin" || { echo "::error::$bin missing"; exit 1; }
             echo "--- $bin imports ---"
-            imports=$(objdump -p "$bin" | sed -n 's/^\s*DLL Name: //p' | sort -u)
+            imports=$(x86_64-w64-mingw32-objdump -p "$bin" | sed -n 's/^\s*DLL Name: //p' | sort -u)
             echo "$imports"
             bad=$(echo "$imports" | grep -ivE \
               '^(api-ms-win-[a-z0-9el-]+|kernel32|user32|gdi32|advapi32|shell32|ole32|oleaut32|comctl32|comdlg32|imm32|winmm|version|setupapi|dwmapi|ws2_32|wsock32|iphlpapi|bcrypt|crypt32|secur32|netapi32|userenv|dbghelp|shlwapi|msvcrt|ucrtbase|rpcrt4|winspool|uxtheme|hid|cfgmgr32|powrprof|avrt|dxgi|d3d11|opengl32)\.dll$' \
@@ -453,9 +483,9 @@ jobs:
           version=$(sed -n 's/^project(.*VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
           makensis -V2 \
             -DVERSION="$version" \
-            -DSRCDIR="$(cygpath -w "$PWD/dist/FujiNet-Go-Apple2")" \
-            -DOUTFILE="$(cygpath -w "$PWD/dist/FujiNet-Go-Apple2-Setup.exe")" \
-            -DAPPICON="$(cygpath -w "$PWD/frontends/windows/app.ico")" \
+            -DSRCDIR="$PWD/dist/FujiNet-Go-Apple2" \
+            -DOUTFILE="$PWD/dist/FujiNet-Go-Apple2-Setup.exe" \
+            -DAPPICON="$PWD/frontends/windows/app.ico" \
             build-aux/windows/installer.nsi
           test -f dist/FujiNet-Go-Apple2-Setup.exe \
             || { echo "::error::installer not produced"; exit 1; }
@@ -466,7 +496,11 @@ jobs:
           path: dist/FujiNet-Go-Apple2-Setup.exe
 
   flatpak:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, fujinet-builder]
+    container:
+      image: ubuntu:24.04
+      options: --privileged --add-host=host.docker.internal:host-gateway
+    # --privileged: flatpak-builder's bubblewrap sandbox needs user namespaces.
     strategy:
       fail-fast: false
       matrix:
@@ -480,15 +514,20 @@ jobs:
             sdk: org.kde.Sdk
             version: '6.11'
     steps:
-      - uses: actions/checkout@v5
       # flatpak-builder is driven directly rather than through the community
       # container action, whose tags stop at gnome-47.
       - name: Install flatpak-builder
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder
+          MIRROR=http://mirrors.edge.kernel.org/ubuntu
+          (echo > /dev/tcp/host.docker.internal/3142) 2>/dev/null \
+            && MIRROR=http://host.docker.internal:3142/mirrors.edge.kernel.org/ubuntu
+          sed -i "s|http://[a-z.]*ubuntu.com/ubuntu|$MIRROR|" /etc/apt/sources.list.d/ubuntu.sources
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl flatpak flatpak-builder elfutils unzip xz-utils
           flatpak remote-add --if-not-exists --user flathub \
             https://flathub.org/repo/flathub.flatpakrepo
+      - uses: actions/checkout@v5
       - name: Install the runtime
         run: |
           flatpak install --user -y flathub \
@@ -522,10 +561,22 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [linux, linux-packages, macos, windows, flatpak]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, fujinet-builder]
+    container:
+      image: ubuntu:24.04
+      options: --add-host=host.docker.internal:host-gateway
     permissions:
       contents: write
     steps:
+      - name: Install base tools
+        shell: bash
+        run: |
+          MIRROR=http://mirrors.edge.kernel.org/ubuntu
+          (echo > /dev/tcp/host.docker.internal/3142) 2>/dev/null \
+            && MIRROR=http://host.docker.internal:3142/mirrors.edge.kernel.org/ubuntu
+          sed -i "s|http://[a-z.]*ubuntu.com/ubuntu|$MIRROR|" /etc/apt/sources.list.d/ubuntu.sources
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates gh zip
       - uses: actions/checkout@v5
       # The version lives in CMakeLists.txt and the AppStream metainfo (which
       # is where release notes belong). A tag that disagrees with them would
@@ -560,8 +611,8 @@ jobs:
             -exec cp {} release/ \;
           (cd artifacts/FujiNet-Go-Apple2-windows \
            && zip -qr "../../release/FujiNet-Go-Apple2-${tag}-windows.zip" .)
-          cp "artifacts/FujiNet-Go-Apple2-macos/FujiNet-Go-Apple2-macos.zip" \
-             "release/FujiNet-Go-Apple2-${tag}-macos.zip"
+          cp "artifacts/FujiNet-Go-Apple2-macos-universal/FujiNet-Go-Apple2-macos-universal.zip" \
+             "release/FujiNet-Go-Apple2-${tag}-macos-universal.zip"
           cp "artifacts/FujiNet-Go-Apple2-windows-installer/FujiNet-Go-Apple2-Setup.exe" \
              "release/FujiNet-Go-Apple2-${tag}-windows-setup.exe"
           cp "artifacts/fujinet-go-apple2-gnome-flatpak/fujinet-go-apple2-gnome.flatpak" \
