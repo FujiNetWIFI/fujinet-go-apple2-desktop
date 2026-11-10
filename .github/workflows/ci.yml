@@ -198,10 +198,10 @@ jobs:
       - uses: actions/checkout@v5
       # The runner has no Homebrew: only the base macOS tools (clang, make,
       # perl, python3, git). cmake and ninja come from PyPI wheels in a venv;
-      # cmake is held below 4 because 4.x dropped the FindBoost module the
-      # header-only AppleWin Boost lookup relies on. Boost is only ever used
-      # as headers, so the release tarball is unpacked and found via
-      # BOOST_ROOT.
+      # cmake is held below 4 because the older vendored FujiNet subprojects
+      # (libssh, libsmb2, libnfs, mbedTLS) declare pre-3.5 minimums that
+      # cmake 4 rejects. Boost is only ever used as headers, so the release
+      # tarball is unpacked and handed to the build as APPLE2_BOOST_INCLUDE_DIR.
       - name: Install build tools
         run: |
           python3 -m venv "$RUNNER_TEMP/tools"
@@ -220,7 +220,7 @@ jobs:
           curl -fsSL https://archives.boost.io/release/1.87.0/source/boost_1_87_0.tar.gz \
             | tar -xz -C "$RUNNER_TEMP/boost" --strip-components=1
       - name: Point the build at Boost
-        run: echo "BOOST_ROOT=$RUNNER_TEMP/boost" >> "$GITHUB_ENV"
+        run: echo "BOOST_INCLUDE=$RUNNER_TEMP/boost" >> "$GITHUB_ENV"
       - name: Cache universal OpenSSL
         id: openssl-cache
         uses: actions/cache@v4
@@ -276,7 +276,9 @@ jobs:
       # for over a decade. See the note at the top of this file and
       # COMPLIANCE.md.
       - name: Configure
-        run: cmake -B build -G Ninja -DFRONTEND=macos -DWITH_APPLE_ROMS=ON
+        run: |
+          cmake -B build -G Ninja -DFRONTEND=macos -DWITH_APPLE_ROMS=ON \
+            -DAPPLE2_BOOST_INCLUDE_DIR="$BOOST_INCLUDE"
       - name: Build
         run: cmake --build build
       - name: Test
