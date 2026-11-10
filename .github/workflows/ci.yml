@@ -221,6 +221,11 @@ jobs:
             | tar -xz -C "$RUNNER_TEMP/boost" --strip-components=1
       - name: Point the build at Boost
         run: echo "BOOST_INCLUDE=$RUNNER_TEMP/boost" >> "$GITHUB_ENV"
+      # Some tools (the firmware's own webdav tests) run the compiler
+      # directly, and the Xcode toolchain's clang only finds the libc++
+      # headers through an explicit SDK path.
+      - name: Select the macOS SDK
+        run: echo "SDKROOT=$(xcrun --show-sdk-path)" >> "$GITHUB_ENV"
       - name: Cache universal OpenSSL
         id: openssl-cache
         uses: actions/cache@v4
