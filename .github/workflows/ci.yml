@@ -183,25 +183,68 @@ jobs:
             build/*.tar.gz
           if-no-files-found: error
 
+  # Runs on the org's self-hosted Intel Tahoe runner (Default runner group),
+  # so the bundle is built UNIVERSAL (arm64 + x86_64): CMAKE_OSX_ARCHITECTURES
+  # in the environment reaches every nested cmake run (SDL3, mbedTLS, the
+  # FujiNet runtime). OpenSSL, which FujiNet's libssh links statically, is the
+  # exception -- Homebrew's libcrypto.a is single-arch -- so it is built here
+  # for both and lipo'd. The arm64 slice is built and checked but cannot run
+  # on this runner; the tests exercise the x86_64 slice.
   macos:
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, X64, tahoe]
+    env:
+      CMAKE_OSX_ARCHITECTURES: "arm64;x86_64"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
     steps:
       - uses: actions/checkout@v5
       - name: Install dependencies
-        run: brew install ninja boost
+        run: brew install cmake ninja boost
+      - name: Cache universal OpenSSL
+        id: openssl-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/openssl-universal
+          key: openssl-universal-3.5.0-${{ runner.os }}
+      - name: Build universal static OpenSSL
+        if: steps.openssl-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch openssl-3.5.0 \
+            https://github.com/openssl/openssl.git "$RUNNER_TEMP/openssl-src"
+          DEST="$RUNNER_TEMP/openssl-universal"
+          for arch in arm64 x86_64; do
+            rm -rf "$RUNNER_TEMP/openssl-$arch"
+            cp -R "$RUNNER_TEMP/openssl-src" "$RUNNER_TEMP/openssl-$arch"
+            (cd "$RUNNER_TEMP/openssl-$arch" &&
+             ./Configure darwin64-$arch-cc no-shared no-tests \
+               --prefix="$RUNNER_TEMP/openssl-$arch-inst" --libdir=lib &&
+             make -j"$(sysctl -n hw.ncpu)" build_libs &&
+             make install_dev)
+          done
+          mkdir -p "$DEST/lib"
+          cp -R "$RUNNER_TEMP/openssl-x86_64-inst/include" "$DEST/include"
+          for lib in libcrypto.a libssl.a; do
+            lipo -create "$RUNNER_TEMP/openssl-arm64-inst/lib/$lib" \
+                         "$RUNNER_TEMP/openssl-x86_64-inst/lib/$lib" \
+                 -output "$DEST/lib/$lib"
+          done
+      - name: Point the FujiNet build at the universal OpenSSL
+        run: echo "OPENSSL_ROOT_DIR=$RUNNER_TEMP/openssl-universal" >> "$GITHUB_ENV"
       # SDL3 is linked STATICALLY on macOS so anything shipped has no
       # Homebrew (or other non-system) library dependencies -- a bundle that
       # links /opt/homebrew paths only launches on machines that happen to
-      # have that formula installed.
+      # have that formula installed. Installed under RUNNER_TEMP: the runner
+      # is persistent and has no passwordless sudo to rely on.
       - name: Build and install static SDL3
         run: |
+          rm -rf sdl3-src
           git clone --depth 1 --branch release-3.4.12 \
             https://github.com/libsdl-org/SDL.git sdl3-src
           cmake -S sdl3-src -B sdl3-src/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=OFF -DSDL_STATIC=ON \
-            -DSDL_TEST_LIBRARY=OFF
+            -DSDL_TEST_LIBRARY=OFF -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl3"
           cmake --build sdl3-src/build
-          sudo cmake --install sdl3-src/build
+          cmake --install sdl3-src/build
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/sdl3" >> "$GITHUB_ENV"
       # This job is the only machine that ever compiles the AppKit frontend.
       # (Homebrew's mbedTLS is 4.x, which drops the legacy headers FujiNet
       # includes, so the FujiNet build compiles the pinned 3.6.5 for itself.)
@@ -234,6 +277,11 @@ jobs:
           while IFS= read -r macho; do
             echo "--- $macho ---"
             otool -L "$macho" | tail -n +2
+            archs="$(lipo -archs "$macho")"
+            case "$archs" in
+              *x86_64*arm64*|*arm64*x86_64*) ;;
+              *) echo "::error::$macho is not universal ($archs)"; fail=1 ;;
+            esac
             if otool -L "$macho" | tail -n +2 \
                  | grep -E "/opt/homebrew|/usr/local"; then
               echo "::error::non-system library leaked into $macho"
