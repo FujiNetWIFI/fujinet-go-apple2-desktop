@@ -194,18 +194,33 @@ jobs:
     runs-on: [self-hosted, macOS, X64, tahoe]
     env:
       CMAKE_OSX_ARCHITECTURES: "arm64;x86_64"
-      HOMEBREW_NO_AUTO_UPDATE: "1"
     steps:
       - uses: actions/checkout@v5
-      - name: Probe runner tools
+      # The runner has no Homebrew: only the base macOS tools (clang, make,
+      # perl, python3, git). cmake and ninja come from PyPI wheels in a venv;
+      # cmake is held below 4 because 4.x dropped the FindBoost module the
+      # header-only AppleWin Boost lookup relies on. Boost is only ever used
+      # as headers, so the release tarball is unpacked and found via
+      # BOOST_ROOT.
+      - name: Install build tools
         run: |
-          echo "PATH=$PATH"; uname -m; sw_vers -productVersion; whoami
-          ls -l /usr/local/bin/brew /opt/homebrew/bin/brew 2>&1 || true
-          for t in cmake ninja python3 git clang make perl; do printf '%s: ' $t; command -v $t || echo missing; done
-          ls /usr/local/include/boost /opt/homebrew/include/boost 2>&1 | head -2
-          sudo -n true 2>&1 && echo sudo-ok || echo no-sudo
-      - name: Install dependencies
-        run: brew install cmake ninja boost
+          python3 -m venv "$RUNNER_TEMP/tools"
+          "$RUNNER_TEMP/tools/bin/pip" install --quiet "cmake>=3.28,<4" ninja
+          echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
+      - name: Cache Boost headers
+        id: boost-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/boost
+          key: boost-1.87.0
+      - name: Fetch Boost headers
+        if: steps.boost-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/boost"
+          curl -fsSL https://archives.boost.io/release/1.87.0/source/boost_1_87_0.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP/boost" --strip-components=1
+      - name: Point the build at Boost
+        run: echo "BOOST_ROOT=$RUNNER_TEMP/boost" >> "$GITHUB_ENV"
       - name: Cache universal OpenSSL
         id: openssl-cache
         uses: actions/cache@v4
