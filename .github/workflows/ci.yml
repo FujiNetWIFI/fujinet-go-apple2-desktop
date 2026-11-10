@@ -197,6 +197,13 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: "1"
     steps:
       - uses: actions/checkout@v5
+      - name: Probe runner tools
+        run: |
+          echo "PATH=$PATH"; uname -m; sw_vers -productVersion; whoami
+          ls -l /usr/local/bin/brew /opt/homebrew/bin/brew 2>&1 || true
+          for t in cmake ninja python3 git clang make perl; do printf '%s: ' $t; command -v $t || echo missing; done
+          ls /usr/local/include/boost /opt/homebrew/include/boost 2>&1 | head -2
+          sudo -n true 2>&1 && echo sudo-ok || echo no-sudo
       - name: Install dependencies
         run: brew install cmake ninja boost
       - name: Cache universal OpenSSL
