@@ -11,6 +11,7 @@
 
 #include <cstdio>
 
+#include "Accent.h"
 #include "MainWindow.h"
 #include "apple2session.h"
 
@@ -44,9 +45,28 @@ int main(int argc, char *argv[])
         fprintf(stderr, "session start: %s\n",
                 apple2session_last_error(session));
 
-    MainWindow win(session);
-    win.show();
-    const int rc = app.exec();
+    /* Toggled-on push buttons (Map while armed, the chosen side of a segment)
+     * wear the accent colour with dark text, light or dark. The rule spells out
+     * the whole box: with only a background colour the style still draws its
+     * own bevel, which darkens it (Breeze), lightens it (Fusion) or ignores it
+     * (Kvantum). */
+    const QColor accent = apple2CtlAccent();
+    app.setStyleSheet(
+        QStringLiteral(
+            "QPushButton[accent=\"true\"] { background-color: %1; color: %4;"
+            " border: 1px solid %3; border-radius: 4px; padding: 4px 12px; }"
+            "QPushButton[accent=\"true\"]:hover { background-color: %2; }")
+            .arg(accent.name(), accent.lighter(112).name(), accent.darker(140).name(),
+                 apple2CtlAccentInk().name()));
+
+    int rc;
+    {
+        /* The windows go before the session does: the Controllers window still
+         * calls into it as it is hidden. */
+        MainWindow win(session);
+        win.show();
+        rc = app.exec();
+    }
 
     apple2session_free(session);
     return rc;

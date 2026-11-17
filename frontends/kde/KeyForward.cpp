@@ -38,6 +38,13 @@ quint32 keysymForKey(const QKeyEvent *event)
     }
 }
 
+/* Qt reports the X keycode (the evdev code plus 8) on X11 and Wayland. */
+quint32 evdevKeysym(const QKeyEvent *event)
+{
+    const quint32 sc = event->nativeScanCode();
+    return sc >= 8 ? apple2session_keysym_from_evdev(sc - 8) : 0;
+}
+
 void forward(apple2session *session, const QKeyEvent *event, int down)
 {
     const bool ctrl = event->modifiers().testFlag(Qt::ControlModifier);
@@ -65,29 +72,85 @@ void forward(apple2session *session, const QKeyEvent *event, int down)
 
 } // namespace
 
+quint32 physicalKeysym(const QKeyEvent *event)
+{
+    const quint32 ks = evdevKeysym(event);
+    if (ks)
+        return ks;
+
+    const int k = event->key();
+    const bool pad = event->modifiers().testFlag(Qt::KeypadModifier);
+    switch (k) {
+    case Qt::Key_Up:        return APPLE2SESSION_KEYSYM_UP;
+    case Qt::Key_Down:      return APPLE2SESSION_KEYSYM_DOWN;
+    case Qt::Key_Left:      return APPLE2SESSION_KEYSYM_LEFT;
+    case Qt::Key_Right:     return APPLE2SESSION_KEYSYM_RIGHT;
+    case Qt::Key_Tab:       return APPLE2SESSION_KEYSYM_TAB;
+    case Qt::Key_Escape:    return APPLE2SESSION_KEYSYM_ESCAPE;
+    case Qt::Key_Return:    return APPLE2SESSION_KEYSYM_RETURN;
+    case Qt::Key_Enter:     return APPLE2SESSION_KEYSYM_KP_ENTER;
+    case Qt::Key_Backspace: return APPLE2SESSION_KEYSYM_BACKSPACE;
+    case Qt::Key_Space:     return APPLE2SESSION_KEYSYM_SPACE;
+    case Qt::Key_Shift:     return APPLE2SESSION_KEYSYM_LSHIFT;
+    case Qt::Key_Control:   return APPLE2SESSION_KEYSYM_LCTRL;
+    case Qt::Key_Alt:       return APPLE2SESSION_KEYSYM_LALT;
+    default: break;
+    }
+    if (k >= Qt::Key_F1 && k <= Qt::Key_F12)
+        return APPLE2SESSION_KEYSYM_F1 + (quint32)(k - Qt::Key_F1);
+    if (k >= Qt::Key_0 && k <= Qt::Key_9)
+        return (pad ? (quint32)APPLE2SESSION_KEYSYM_KP_0 : (quint32)'0') +
+               (quint32)(k - Qt::Key_0);
+    if (k >= Qt::Key_A && k <= Qt::Key_Z)
+        return (quint32)('a' + (k - Qt::Key_A));
+    if (pad && k == Qt::Key_Asterisk) return APPLE2SESSION_KEYSYM_KP_MULTIPLY;
+    if (pad && k == Qt::Key_Slash)    return APPLE2SESSION_KEYSYM_KP_DIVIDE;
+    if (pad && k == Qt::Key_Period)   return APPLE2SESSION_KEYSYM_KP_PERIOD;
+    if (k >= 0x20 && k <= 0x7e)
+        return (quint32)k;
+    return 0;
+}
+
+bool isAppKey(const QKeyEvent *event)
+{
+    const int k = event->key();
+    return k >= Qt::Key_F9 && k <= Qt::Key_F12;
+}
+
 bool shortcutOverride(QEvent *event)
 {
     if (event->type() != QEvent::ShortcutOverride)
         return false;
     QKeyEvent *ke = static_cast<QKeyEvent *>(event);
-    if (ke->key() == Qt::Key_F10 || ke->key() == Qt::Key_F11 ||
-        ke->key() == Qt::Key_F12)
+    if (ke->key() == Qt::Key_F9 || ke->key() == Qt::Key_F10 ||
+        ke->key() == Qt::Key_F11 || ke->key() == Qt::Key_F12)
         return false;
     event->accept();
     return true;
 }
 
+/* The bindings first; the machine gets what they did not take. A release
+ * always asks the bindings too: it only lets go of what its press asserted. */
+static void route(apple2session *session, QKeyEvent *event, int down)
+{
+    const quint32 ks = physicalKeysym(event);
+    const bool ctrl = event->modifiers().testFlag(Qt::ControlModifier);
+    if (ks && apple2session_input_key(session, ks, down, ctrl ? 1 : 0))
+        return;
+    forward(session, event, down);
+}
+
 void keyPress(apple2session *session, QKeyEvent *event)
 {
     if (!event->isAutoRepeat())
-        forward(session, event, 1);
+        route(session, event, 1);
     event->accept();
 }
 
 void keyRelease(apple2session *session, QKeyEvent *event)
 {
     if (!event->isAutoRepeat())
-        forward(session, event, 0);
+        route(session, event, 0);
     event->accept();
 }
 

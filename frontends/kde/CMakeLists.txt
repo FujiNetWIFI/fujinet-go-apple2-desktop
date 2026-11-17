@@ -22,6 +22,7 @@ add_executable(fujinet-go-apple2-kde
   SoftDisplayWidget.cpp
   FrameFeed.cpp
   KeyForward.cpp
+  controllers/ControllersWindow.cpp
   SettingsDialog.cpp
   FujiNetWindows.cpp
   help/HelpWindow.cpp
@@ -31,6 +32,10 @@ add_executable(fujinet-go-apple2-kde
 
 target_link_libraries(fujinet-go-apple2-kde PRIVATE
   apple2session Qt6::Widgets Qt6::GuiPrivate)
+# bindings.h is the session's private header, as the sibling Controllers
+# windows include it.
+target_include_directories(fujinet-go-apple2-kde PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/core/src")
 # The display's shaders, baked for every backend and embedded as resources.
 qt_add_shaders(fujinet-go-apple2-kde "display_shaders"
   PREFIX "/"
@@ -61,6 +66,30 @@ install(FILES data/${KDE_APP_ID}.metainfo.xml
 # whose RAM holds a hand-assembled loop. Skips (QSKIP) without the Apple II
 # ROMs, like the core's engine tests.
 find_package(Qt6 COMPONENTS Test QUIET)
+
+# The Controllers window, offscreen, on an SDL virtual gamepad (no machine): hidden
+# at start, fixed size, the mouse holding a button and dragging the stick, the
+# paddles' knobs, the keyboard's caps, Map taking a key and a gamepad button, F9,
+# and a pad's row with its port picker. SKIPs (77) where SDL has no virtual
+# joysticks. SDL3 is the session library's dependency, so the test finds it too.
+find_package(SDL3 CONFIG QUIET)
+if(Qt6Test_FOUND AND SDL3_FOUND)
+  add_executable(controllers_test_kde controllers_test.cpp
+                 controllers/ControllersWindow.cpp KeyForward.cpp
+                 help/HelpWindow.cpp debugger/DebuggerWindow.cpp
+                 debugger/VideoTab.cpp)
+  set_target_properties(controllers_test_kde PROPERTIES CXX_STANDARD 17)
+  target_link_libraries(controllers_test_kde PRIVATE apple2session
+                        Qt6::Widgets Qt6::GuiPrivate Qt6::Test SDL3::SDL3)
+  target_include_directories(controllers_test_kde PRIVATE
+                             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/core/src")
+  target_compile_options(controllers_test_kde PRIVATE -Wall -Wextra)
+  add_test(NAME controllers_kde COMMAND controllers_test_kde)
+  set_tests_properties(controllers_kde PROPERTIES
+                       SKIP_RETURN_CODE 77 TIMEOUT 60
+                       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 if(Qt6Test_FOUND)
   add_executable(debugger_test debugger_test.cpp debugger/DebuggerWindow.cpp
                  debugger/VideoTab.cpp

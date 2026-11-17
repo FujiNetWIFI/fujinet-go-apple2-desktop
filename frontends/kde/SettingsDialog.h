@@ -9,6 +9,7 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QLineEdit>
+#include <QString>
 #include <QVector>
 
 #include "apple2session.h"
@@ -16,11 +17,17 @@
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit SettingsDialog(apple2session *session, QWidget *parent = nullptr);
+    /* startTab names the tab to open on: "Input"; anything else is Machine. */
+    explicit SettingsDialog(apple2session *session, QWidget *parent = nullptr,
+                            const QString &startTab = QString());
 
     /* True when a machine/slot option changed, so the caller knows the
      * session has to be restarted for it to take effect. */
     bool machineDirty() const { return m_machineDirty; }
+
+    /* The Input tab's Open Controllers closed the dialog (as OK): the caller
+     * opens the window once the modal dialog is gone. */
+    bool openControllers() const { return m_openControllers; }
 
     /* Saves the external FujiNet fields first; an address that is not
      * host:port keeps the dialog open. */
@@ -42,4 +49,5 @@ private:
     QCheckBox *m_external = nullptr;
     QLineEdit *m_externalAddr = nullptr;
     bool m_machineDirty = false;
+    bool m_openControllers = false;
 };

@@ -16,6 +16,7 @@
 #include <QStatusBar>
 
 #include "DisplayView.h"
+#include "controllers/ControllersWindow.h"
 #include "DisplayWidget.h"
 #include "SoftDisplayWidget.h"
 #include "debugger/DebuggerWindow.h"
@@ -46,10 +47,98 @@ MainWindow::MainWindow(apple2session *session, QWidget *parent)
     applyDisplaySettings();
     m_display->widget()->setFocus();
 
-    /* Developer affordance: open the debugger alongside the main window,
-     * which is what you want when the app dies before you reach a menu. */
+    /* One timer for the news the other threads leave: the gamepad thread
+     * cannot call into Qt, so it posts console actions and hot-plug events and
+     * this takes them. The baseline keeps pads already attached from
+     * announcing themselves. */
+    m_padGen = apple2session_gamepad_generation(session);
+    connect(&m_tickTimer, &QTimer::timeout, this, &MainWindow::tick);
+    m_tickTimer.start(50);
+
+    /* Developer affordances: open the debugger, the Controllers window or the
+     * settings alongside the main window, which is what you want when the app
+     * dies before you reach a menu. */
     if (qEnvironmentVariableIsSet("APPLE2_OPEN_DEBUGGER"))
         DebuggerWindow::show(this, m_session);
+    if (qEnvironmentVariableIsSet("APPLE2_OPEN_CONTROLLERS"))
+        QTimer::singleShot(0, this, [this] { toggleControllers(); });
+    if (qEnvironmentVariableIsSet("APPLE2_OPEN_PREFS"))
+        QTimer::singleShot(0, this, [this] {
+            showSettings(QString::fromLocal8Bit(qgetenv("APPLE2_OPEN_PREFS")));
+        });
+}
+
+void MainWindow::toggleControllers()
+{
+    /* Hidden, not destroyed: a remap in progress and the window's position
+     * both survive closing it. */
+    apple2ControllersToggle(this, m_session);
+}
+
+void MainWindow::tick()
+{
+    const unsigned posted = apple2session_sysaction_take(m_session);
+    for (int act = 0; act < APPLE2SESSION_SYSACT_COUNT; ++act)
+        if (posted & (1u << act))
+            runSysaction(act);
+
+    const unsigned gen = apple2session_gamepad_generation(m_session);
+    if (gen != m_padGen) {
+        m_padGen = gen;
+        char msg[160];
+        if (apple2session_gamepad_last_event(m_session, msg, sizeof msg) > 0)
+            status(QString::fromUtf8(msg));
+    }
+}
+
+/* A console action, from a key, a pad button, the Controllers window or the
+ * menu: always here, on the UI thread. */
+void MainWindow::runSysaction(int sysact)
+{
+    switch (sysact) {
+    case APPLE2SESSION_SYSACT_RESET:
+        apple2session_sysaction_fire(m_session, APPLE2SESSION_SYSACT_RESET);
+        status(QStringLiteral("Reset"));
+        break;
+    case APPLE2SESSION_SYSACT_POWER:
+        apple2session_sysaction_fire(m_session, APPLE2SESSION_SYSACT_POWER);
+        status(QStringLiteral("Power cycled"));
+        break;
+    case APPLE2SESSION_SYSACT_DEBUG_STOP:
+        apple2session_sysaction_fire(m_session, APPLE2SESSION_SYSACT_DEBUG_STOP);
+        DebuggerWindow::showFor(this, m_session);
+        break;
+    default: break;
+    }
+}
+
+/* Keys held into a focus change must not stay down. */
+void MainWindow::changeEvent(QEvent *event)
+{
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow() &&
+        !apple2ControllersActive())
+        apple2session_release_all(m_session);
+}
+
+/* A changed machine option restarts the session; the Input tab's changes apply
+ * at once, and Open Controllers closes the dialog (as OK) so the window it
+ * opens is not blocked by a modal one. */
+void MainWindow::showSettings(const QString &startTab)
+{
+    SettingsDialog dlg(m_session, this, startTab);
+    connect(&dlg, &SettingsDialog::displayChanged, this,
+            &MainWindow::applyDisplaySettings);
+    dlg.exec();
+    apple2ControllersRefresh();
+    if (dlg.machineDirty()) {
+        restartSession();
+        status(QStringLiteral("Machine options applied "
+                              "(session restarted)"));
+    }
+    m_display->widget()->setFocus();
+    if (dlg.openControllers())
+        apple2ControllersShow(this, m_session);
 }
 
 void MainWindow::status(const QString &message)
@@ -136,14 +225,10 @@ void MainWindow::importSystemRoms()
 void MainWindow::buildMenus()
 {
     QMenu *machine = menuBar()->addMenu(QStringLiteral("&Machine"));
-    machine->addAction(QStringLiteral("&Reset"), this, [this] {
-        apple2session_reset(m_session, 0);
-        status(QStringLiteral("Reset"));
-    });
-    machine->addAction(QStringLiteral("&Power Cycle"), this, [this] {
-        apple2session_reset(m_session, 1);
-        status(QStringLiteral("Power cycled"));
-    });
+    machine->addAction(QStringLiteral("&Reset"), this,
+                       [this] { runSysaction(APPLE2SESSION_SYSACT_RESET); });
+    machine->addAction(QStringLiteral("&Power Cycle"), this,
+                       [this] { runSysaction(APPLE2SESSION_SYSACT_POWER); });
     machine->addSeparator();
     machine->addAction(QStringLiteral("&Quit"), QKeySequence::Quit, qApp,
                        &QApplication::quit);
@@ -173,22 +258,14 @@ void MainWindow::buildMenus()
     });
 
     QMenu *view = menuBar()->addMenu(QStringLiteral("&View"));
+    view->addAction(QStringLiteral("&Controllers"), QKeySequence(Qt::Key_F9),
+                    this, [this] { toggleControllers(); });
     view->addAction(QStringLiteral("&Debugger"), QKeySequence(Qt::Key_F12),
                     this, [this] { DebuggerWindow::show(this, m_session); });
 
     QMenu *settings = menuBar()->addMenu(QStringLiteral("&Settings"));
-    settings->addAction(QStringLiteral("&Settings…"), this, [this] {
-        SettingsDialog dlg(m_session, this);
-        connect(&dlg, &SettingsDialog::displayChanged, this,
-                &MainWindow::applyDisplaySettings);
-        dlg.exec();
-        if (dlg.machineDirty()) {
-            restartSession();
-            status(QStringLiteral("Machine options applied "
-                                  "(session restarted)"));
-        }
-        m_display->widget()->setFocus();
-    });
+    settings->addAction(QStringLiteral("&Settings…"), this,
+                        [this] { showSettings(); });
 
     QMenu *help = menuBar()->addMenu(QStringLiteral("&Help"));
     {
