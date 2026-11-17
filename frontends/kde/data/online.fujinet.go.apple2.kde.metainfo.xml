@@ -48,6 +48,19 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.11.0" date="2026-11-16">
+      <description>
+        <p>
+          macOS: the picture is drawn with Metal in step with the display, so it is smoother on 60 and 120 Hz screens; the emulator runs with game-grade scheduling priority; and the app opts into macOS Game Mode when it is full screen.
+        </p>
+        <p>
+          Audio: the same click-free sound buffer, with much less delay than the old queue that dropped its oldest sound when it filled.
+        </p>
+        <p>
+          Requires macOS 13.3 or later.
+        </p>
+      </description>
+    </release>
     <release version="0.10.0" date="2026-11-09">
       <description>
         <p>

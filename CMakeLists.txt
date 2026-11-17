@@ -11,7 +11,7 @@ endif()
 # and the release workflow all take it from PROJECT_VERSION, and cutting a
 # tag checks that the tag agrees with it (see "Cutting a release" in the
 # README).
-project(fujinet-go-apple2-desktop VERSION 0.10.0 LANGUAGES C CXX)
+project(fujinet-go-apple2-desktop VERSION 0.11.0 LANGUAGES C CXX)
 
 add_compile_definitions(APPLE2_VERSION_STRING="${PROJECT_VERSION}")
 
