@@ -32,7 +32,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "keyboard.h"
+#include "apple2_keyboard.h"
 #include "session_internal.h"
 
 #define GAP   0.1f

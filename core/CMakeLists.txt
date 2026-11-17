@@ -206,7 +206,7 @@ add_library(apple2session STATIC
   src/hid_keys.c
   src/pad_assign.c
   src/controls.c
-  src/keyboard.c
+  src/apple2_keyboard.c
   src/audio_sdl.c
   src/gamepad_sdl.c
   src/fujinet_runtime.c

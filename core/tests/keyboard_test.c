@@ -21,7 +21,7 @@
 #include <unistd.h>
 
 #include "apple2session.h"
-#include "keyboard.h"
+#include "apple2_keyboard.h"
 #include "test_tmpdir.h"
 
 static int failures;
