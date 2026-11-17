@@ -16,7 +16,7 @@ is the model repository, and its `PORTING.md` is the specification this
 follows.
 
 > **Status: in progress.** The machine boots into FujiNet's CONFIG, paced to
-> display vsync, with keyboard and paddle input, disk/ROM import, and a 6502
+> display vsync, with keyboard, joystick and paddle input, disk/ROM import, and a 6502
 > debugger with its own native window on all four frontends. Linux, macOS,
 > Windows and both flatpaks are green in CI, which also builds the Windows
 > installer and the macOS bundle and can cut a release. Still to come: code
@@ -115,9 +115,11 @@ See `COMPLIANCE.md` for the reasoning and how the `OFF` build is enforced.
 
 ## Keyboard
 
-Everything goes to the Apple II except **F10** (menu), **F11** (fullscreen)
-and **F12** (debugger). In particular **Alt is not passed to the window
-manager** — the Alt keys are Open Apple and Closed Apple.
+Everything goes to the Apple II except **F9** (the Controllers window; inside
+the debugger it toggles a breakpoint), **F10** (menu), **F11** (fullscreen) and
+**F12** (debugger). In particular **Alt is not passed to the window manager** —
+the Alt keys are Open Apple and Closed Apple, and they are the game port's
+buttons 0 and 1.
 
 On macOS the Apple keys are the two **Option** keys, not Command: Command is
 how every menu shortcut on the system is typed, and swallowing it would cost
@@ -150,6 +152,35 @@ from the moment the session starts, so it also holds what happened before the
 window was opened. Identical exchanges in a row fold into one line with a
 count.
 
+## Controllers
+
+**F9** (⌘K on a Mac; **View ▸ Controllers**) opens the Controllers window: the
+game port as the real hardware looks. It is a **Joystick** (the cream Apple
+joystick of the //e and //c with its two orange buttons and black stick, in
+**Beige (IIe)** or **Platinum (IIc)** colours, dragged proportionally with the
+mouse) or two **Paddles** (the Apple Hand Controllers: drag or scroll the knob).
+**Reset** and **Power Cycle** buttons sit under the picture, and a **Keyboard**
+check box adds the Apple //e's own 63-key keyboard (Shift and Control latch,
+Caps Lock toggles, Open and Option are buttons 0 and 1). Held controls light up,
+whoever holds them.
+
+**Map** rebinds a key or gamepad button to a control, **Clear** removes it,
+**Defaults** restores them and **Show bindings** prints them on the controls.
+Alt, Meta, Super, F9, F11 and F12 cannot be bound. By default the numeric
+keypad is the joystick (4 6 8 2 steer, 0 and Enter are buttons 0 and 1), and in
+paddles mode 7 9 5 are paddle 0 and 1 3 . are paddle 1.
+
+| Gamepads | |
+|---|---|
+| Hot-plug | pads (and plain USB joysticks, such as Apple II joystick adapters) attach as they are plugged in; a message shows when one comes or goes |
+| Port | each pad plays *Automatic*, *Joystick*, or in paddles mode *Paddle 0* / *Paddle 1*; explicit choices are remembered by the pad's identity (`pad_assign`) |
+| Unplug | a pad that is unplugged or moves lets go of everything it held |
+| Settings | **Preferences ▸ Input** (View ▸ Input Settings… on Windows): controller, joystick colour, Enable gamepads, a row per pad, Reset Controls |
+
+The machine's game port carries one joystick or two paddles; there is no second
+joystick. There is no Reset to CONFIG button (Power Cycle boots CONFIG), and Stop
+in Debugger has a button nowhere: bind a key to it.
+
 ## Diagnostics
 
 | Variable | Effect |
@@ -157,6 +188,9 @@ count.
 | `APPLE2_PACE_LOG=1` | once-per-second frame pacing: fps, frames behind, frames on vsync |
 | `APPLE2_ROM_DIR` | where a `WITH_APPLE_ROMS=OFF` build reads system ROMs |
 | `APPLE2_OPEN_DEBUGGER=1` | open the debugger window at launch |
+| `APPLE2_OPEN_CONTROLLERS=1` | open the Controllers window at launch |
+| `APPLE2_OPEN_PREFS=Input` | open Preferences on a page at launch (GNOME and KDE) |
+| `APPLE2_OPEN_INPUT_SETTINGS=1` | open Input Settings at launch (Windows) |
 | `APPLE2_DEBUGGER_VIEW=N` | open the Video tab on page N (0 = text page 1, 4 = hi-res page 1) |
 | `APPLE2_DEBUGGER_VIDEO_VIEW`, `_MODE`, `_PAGE`, `_OVERLAYS`, `_ZOOM`, `_SECTION` | Video tab capture hooks (`screen`/`decoded`, mode, page, overlay names, zoom, section) |
 | `APPLE2_VIDEO_PIN=x,y` | pin a point of the Video picture (zoomed picture pixels) on open |

@@ -56,6 +56,7 @@ The machine's picture fills the window. The menus have:
   [Disks and ROMs](#disks-and-roms).
 - **FujiNet Configuration…** and **FujiNet Console Log…**: see
   [FujiNet](#fujinet).
+- **Controllers** (<kbd>F9</kbd>): see [The Controllers window](#the-controllers-window).
 - **Debugger** (<kbd>F12</kbd>), **Preferences**, **Help** and **About**.
 
 <!-- only: gnome -->
@@ -110,14 +111,26 @@ and both the press and the release go to the machine.
 
 The two Alt keys are the Apple II's Open Apple (left) and Closed Apple (right),
 which games and the boot ROM use, so they go to the machine rather than the
-window manager. <kbd>Ctrl</kbd> and <kbd>Shift</kbd> are the Apple II's. The app
-keeps only these keys for itself:
+window manager. They are also the game port's buttons 0 and 1, which the
+Controllers window shows lit. <kbd>Ctrl</kbd> and <kbd>Shift</kbd> are the Apple
+II's. The numeric keypad is the joystick (see
+[Changing the controls](#changing-the-controls)). The app keeps only these keys
+for itself:
 
 | Shortcut | Does |
 |---|---|
 | <kbd>Ctrl+Shift+H</kbd> | Help |
+| <kbd>F9</kbd> | Controllers window |
 | <kbd>F11</kbd> | Fullscreen |
 | <kbd>F12</kbd> | Debugger |
+
+<!-- only: macos -->
+
+On a Mac the Controllers window is also <kbd>⌘K</kbd>.
+
+<!-- end -->
+
+In the debugger, <kbd>F9</kbd> toggles a breakpoint instead.
 
 <!-- only: gnome -->
 
@@ -131,12 +144,109 @@ Key combinations with the Super (Windows) key are the desktop's.
 
 <!-- end -->
 
-## Paddles and gamepads
+<!-- context: controllers -->
+## The Controllers window
 
-Gamepads are picked up as they are plugged in. A pad's stick drives the Apple II's
-two analog paddles, PDL0 and PDL1, with a dead zone that is taken off so the
-paddle still reaches its full travel, and its buttons are the paddle buttons.
-The first pad drives them unless another is chosen.
+The Controllers window (<kbd>F9</kbd>) draws what is plugged into the Apple II's
+one game port, as the real thing looks. It floats on its own at a fixed size,
+stays hidden until you ask for it and hides rather than closes. The game port
+carries one joystick or two paddles, so there is no second joystick to show.
+**Plugged in** picks which:
+
+- **Joystick**: the Apple joystick of the //e and //c. A square cream base with
+  two orange square buttons, button 0 on the left and button 1 on top, and a
+  black stick in a recessed square well. The **Colour** choice is **Beige
+  (IIe)** or **Platinum (IIc)**; it only changes how the joystick looks.
+- **Paddles**: two Apple Hand Controllers, each with a ribbed knob and an orange
+  button. Paddle 0 and paddle 1 are the machine's PDL0 and PDL1.
+
+Under the picture are the **Reset** and **Power Cycle** buttons (the same as the
+Machine menu: Power Cycle boots the card in slot 7 into CONFIG), a row for each
+gamepad, and the **Map**, **Clear**, **Defaults** and **Show bindings** buttons,
+a **Keyboard** check box and **Help**. There is no Reset to CONFIG button, and
+Stop in Debugger has no button: bind a key to it (see
+[Changing the controls](#changing-the-controls)).
+
+The controls that are held light up in the accent colour, whoever holds them:
+the keyboard, a gamepad or the mouse. The Alt keys light button 0 and button 1.
+
+| With the mouse | Does |
+|---|---|
+| Press a button | Holds it for as long as the mouse button is down |
+| Drag on the joystick | Moves the stick as far as the pointer goes, in any direction, not in eight steps |
+| Drag on a knob | Turns it to where the pointer is |
+| Wheel over a knob | Nudges it |
+| Drag off a control | Lets it go |
+| Release on Reset, Power Cycle | Runs it |
+
+The stick and the knobs are analog: the machine reads a position, and a knob
+stays where you leave it. Switching to another window lets go of everything the
+mouse and the keyboard hold, and so does changing **Plugged in**. Keys typed in
+the Controllers window go to the machine too, with the Alt keys still Open Apple
+and Closed Apple.
+
+**Show bindings** prints the key or gamepad button on each control. It is
+remembered (setting `controllers_show_bindings`), as are **Plugged in**
+(`controller_mode`, *joystick* or *paddles*) and **Colour** (`controller_model`).
+The window can be opened at launch with `APPLE2_OPEN_CONTROLLERS=1`.
+
+## Keyboard view
+
+The **Keyboard** check box adds the Apple //e's own keyboard under the controller:
+its 63 keys as printed, with Esc, Tab, Control, Shift, Caps Lock, Delete,
+Return, the four arrow keys, the Open Apple and Option (Closed Apple) keys and a
+small Reset key above Esc. Click a key to type it on the Apple II; a key sends
+when it is pressed and lights for a moment. <kbd>Shift</kbd> and
+<kbd>Control</kbd> latch: they stay lit until the next key, and let go after it.
+<kbd>Caps Lock</kbd> toggles, and starts on, as the //e does. The Open Apple and
+Option keys are held while the mouse button is down, and are buttons 0 and 1. The
+keyboard is off by default, and the choice is remembered (setting
+`controllers_keyboard`; Caps Lock is `caps_lock`).
+
+## Changing the controls
+
+**Map** lets you change a control: click it, then click the control to change
+(on the joystick, the side of the well for a direction; on a knob, its left half
+for counter-clockwise, its right half for clockwise and its middle for a
+gamepad axis), then press the key or the gamepad button. Each control has one
+key and one gamepad button. A key already on another control is taken from it.
+**Clear** takes the picked control's key and button away, **Defaults** puts every
+control back, and the Escape key leaves Map. The keys <kbd>Alt</kbd>,
+<kbd>Meta</kbd>, <kbd>Super</kbd>, <kbd>F9</kbd>, <kbd>F11</kbd> and <kbd>F12</kbd>
+cannot be bound. Stop in Debugger can be bound to a key: use **Debugger key**
+where the window has it, or pick it from the Map list.
+
+The defaults are:
+
+| Control | Key | Gamepad |
+|---|---|---|
+| Joystick left, right, up, down | Keypad 4, 6, 8, 2 | D-pad; the left stick, proportionally |
+| Joystick button 0 | Keypad 0 | South (A) |
+| Joystick button 1 | Keypad Enter | East (B) |
+| Paddle 0 left, right, button | Keypad 7, 9, 5 | D-pad left and right; left stick X; South |
+| Paddle 1 left, right, button | Keypad 1, 3, Keypad . | the same on its own pad |
+
+The numeric keypad steers the joystick instead of typing digits. A key bound to
+the other mode's control does nothing until you change **Plugged in**. The
+bindings are remembered (setting `bindings`).
+
+## Gamepads
+
+Gamepads are picked up as they are plugged in, and so are plain USB joysticks
+that are not known as gamepads, such as the USB adapters for Apple II joysticks.
+A pad's stick moves the joystick proportionally (a dead zone is taken off so the
+stick still reaches its full travel); its buttons are the game port's buttons.
+In paddles mode a pad's left stick sets its paddle's knob and the knob stays
+where it was left.
+
+Each gamepad has a row in the Controllers window with its name and a choice of
+*Automatic* and *Joystick* in joystick mode, or *Automatic*, *Paddle 0* and
+*Paddle 1* in paddles mode. Automatic gives the first pad the joystick, or
+paddle 0, and the second pad paddle 1. A pad you choose a port for is
+remembered by its identity (setting `pad_assign`), so it comes back to it when
+it is plugged in again, and unplugging one pad never moves another. A pad that
+has no port drives nothing. When a pad is unplugged or moves, everything it held
+is let go. A message shows in the window when a pad is connected or removed.
 
 # Machines
 
@@ -240,6 +350,35 @@ On a Mac this window is called **Settings** (⌘,).
 - **Slot 3**, **Slot 4**, **Slot 5**, **Slot 6** and **Slot 7**: the card in each
   slot (settings `slot3`, `slot4`, `slot5`, `slot6` and `slot7`). See [Machines](#machines).
 
+<!-- context: prefs/Input -->
+## Input settings
+
+<!-- only: gnome kde macos -->
+
+The Input page has:
+
+- **Controller** (*Joystick* or *Paddles*) and the joystick's colour (*Beige
+  (IIe)* or *Platinum (IIc)*): they apply at once, and the Controllers window
+  follows them (settings `controller_mode` and `controller_model`).
+- **Enable gamepads**: turn the gamepad thread off or on; applies by restarting
+  the session when Preferences closes (setting `enable_gamepad`).
+- A row for each gamepad with its name and the port it plays: *Automatic* or
+  *Joystick*, or in paddles mode *Paddle 0* or *Paddle 1* (see
+  [Gamepads](#gamepads)).
+- **Reset Controls**: every key and gamepad button back to its default.
+- **Open Controllers**: opens the Controllers window.
+
+<!-- end -->
+
+<!-- only: windows -->
+
+On Windows these are in **View ▸ Input Settings…**, a window of its own: the
+**Controller** choice (*Joystick* or *Paddles*; the joystick's colour is chosen in
+the Controllers window), **Enable gamepads** (applies when the window closes), a row for each gamepad, **Reset Controls** and **Open
+Controllers**. `APPLE2_OPEN_INPUT_SETTINGS=1` opens it at launch.
+
+<!-- end -->
+
 <!-- context: prefs/FujiNet -->
 ## FujiNet settings
 
@@ -261,13 +400,18 @@ On a Mac this window is called **Settings** (⌘,).
 On Windows there is no Preferences window: the Machine menu has the **Model**,
 **Video** and **Slot 3** to **Slot 7** menus, the View menu has **Aspect Ratio**
 and **Scanlines**, and **FujiNet ▸ Connection…** has **Use external FujiNet** and
-the **Listen address:port**.
+the **Listen address:port**. The View menu also has **Input Settings…**, with the
+gamepad and controller settings: see [Input settings](#input-settings).
 
 ## The settings file
 
 The settings file is `settings.ini` (see [Files and folders](#files-and-folders)).
 Each setting above names its key. The others are `smooth_scaling` (the pixel
-blending, which follows Scanlines).
+blending, which follows Scanlines), `bindings` and `pad_assign` (the controls and
+the gamepads' ports, see [Changing the controls](#changing-the-controls)), and
+`enable_gamepad`, `controller_mode` and `controller_model` (the Input page), and
+`controllers_show_bindings`, `controllers_keyboard` and `caps_lock` (the
+Controllers window's choices).
 
 # Debugger
 

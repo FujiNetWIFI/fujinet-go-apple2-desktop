@@ -25,7 +25,7 @@ static const char *const platform_names[] = { "GNOME", "KDE", "Windows", "macOS"
 
 /* What the frontends' Help buttons and menus open. */
 static const char *const contexts[] = {
-    "main", "fujilog", "prefs/Machine", "prefs/FujiNet", "prefs/Connection",
+    "main", "fujilog", "controllers", "prefs/Input", "prefs/Machine", "prefs/FujiNet", "prefs/Connection",
     "debugger/console", "debugger/disassembly", "debugger/memory",
     "debugger/breakpoints", "debugger/watches", "debugger/slots", "debugger/trace",
     "debugger/history", "debugger/video", "debugger/fujinet",
@@ -36,6 +36,21 @@ static const char *const labels[] = {
     "Model", "Video", "Slot 3", "Slot 4", "Slot 5", "Slot 6", "Slot 7", "Use external FujiNet",
     "Listen address:port", "Aspect ratio", "Scanlines", "TV (4:3)", "Square pixels", "Integer scale",
 };
+/* The Input page and the Controllers window, as the frontends label them. */
+static const char *const input_labels[] = {
+    "Enable gamepads", "Reset Controls", "Open Controllers", "Joystick", "Paddles",
+};
+static const char *const controller_words[] = {
+    "Plugged in", "Colour", "Reset", "Power Cycle", "Map", "Clear", "Defaults", "Show bindings", "Keyboard",
+    "Beige (IIe)", "Platinum (IIc)", "Paddle 0", "Paddle 1", "PDL0", "PDL1", "Reset to CONFIG",
+    "Stop in Debugger", "APPLE2_OPEN_CONTROLLERS",
+};
+/* The keyboard view, the controls and the gamepads each have their own section. */
+static const char *const keyboard_words[] = { "Caps Lock", "63 keys", "Open Apple", "Closed Apple", "controllers_keyboard" };
+static const char *const control_words[] = {
+    "Alt", "Meta", "Super", "F9", "F11", "F12", "Keypad Enter", "Debugger key", "Clear", "Defaults",
+};
+static const char *const pad_words[] = { "Automatic", "Joystick", "Paddle 0", "Paddle 1", "pad_assign" };
 /* Every choice the session's tables offer, in the topic that lists them. */
 static const char *const choices[] = {
     "Enhanced Apple //e", "Apple ][ (Original)", "Apple ][+", "Apple ][ J-Plus", "Pravets 82", "Pravets 8M",
@@ -49,10 +64,15 @@ static const char *const settings_keys[] = {
     "machine", "video_mode", "slot3", "slot4", "slot5", "slot6", "slot7", "fujinet_external",
     "fujinet_external_addr", "aspect_mode", "scanlines", "smooth_scaling",
 };
+/* The settings the controls write. */
+static const char *const controls_keys[] = {
+    "enable_gamepad", "controller_mode", "controller_model", "controllers_show_bindings",
+    "controllers_keyboard", "caps_lock", "bindings", "pad_assign",
+};
 
 /* The app's shortcuts, as a PC and as a Mac shows them. */
 static const struct { const char *pc, *mac; } shortcuts[] = {
-    { "Ctrl+Shift+H", "⌘?" }, { "F11", "F11" }, { "F12", "F12" },
+    { "Ctrl+Shift+H", "⌘?" }, { "F9", "F9" }, { "F11", "F11" }, { "F12", "F12" },
 };
 
 static int misses;
@@ -165,6 +185,40 @@ check_controls(int p)
         require(p, "controllers-and-keys", "shortcut", platforms[p] == APPLE2HELP_MACOS ? shortcuts[k].mac : shortcuts[k].pc);
 }
 
+/* The Controllers window, the keyboard view, the controls and the gamepads. */
+static void
+check_controllers(int p)
+{
+    for (size_t k = 0; k < sizeof controller_words / sizeof *controller_words; k++)
+        require(p, "the-controllers-window", "controllers window", controller_words[k]);
+    for (size_t k = 0; k < sizeof keyboard_words / sizeof *keyboard_words; k++)
+        require(p, "keyboard-view", "keyboard view", keyboard_words[k]);
+    for (size_t k = 0; k < sizeof control_words / sizeof *control_words; k++)
+        require(p, "changing-the-controls", "changing the controls", control_words[k]);
+    for (size_t k = 0; k < sizeof pad_words / sizeof *pad_words; k++)
+        require(p, "gamepads", "gamepads", pad_words[k]);
+    for (size_t k = 0; k < sizeof controls_keys / sizeof *controls_keys; k++)
+        require(p, "the-settings-file", "controls setting", controls_keys[k]);
+    for (size_t k = 0; k < sizeof input_labels / sizeof *input_labels; k++)
+        require(p, "prefs/Input", "input label", input_labels[k]);
+    /* the default controls: each row names its keys, and the gamepad column */
+    require_row(p, "changing-the-controls", "Joystick left, right, up, down", "Keypad 4, 6, 8, 2", "D-pad");
+    require_row(p, "changing-the-controls", "Joystick button 0", "Keypad 0", "South");
+    require_row(p, "changing-the-controls", "Joystick button 1", "Keypad Enter", "East");
+    require_row(p, "changing-the-controls", "Paddle 0 left, right, button", "Keypad 7, 9, 5", "South");
+    require_row(p, "changing-the-controls", "Paddle 1 left, right, button", "Keypad 1, 3", "Keypad .");
+    /* the Controllers window is also opened from the main window's topic */
+    require(p, "main", "the Controllers menu item", "Controllers");
+    if (platforms[p] == APPLE2HELP_WINDOWS)
+        require(p, "prefs/Input", "the Windows window", "Input Settings");
+    else {
+        require(p, "prefs/Input", "joystick colour", "Beige (IIe)");
+        require(p, "prefs/Input", "joystick colour", "Platinum (IIc)");
+    }
+    if (platforms[p] == APPLE2HELP_MACOS)
+        require(p, "controllers-and-keys", "the Mac's key", "⌘K");
+}
+
 /* The two ports, in the FujiNet topic. */
 static void
 check_ports(int p)
@@ -243,6 +297,7 @@ main(void)
     for (int p = 0; p < 4; p++) {
         check_prefs(p);
         check_controls(p);
+        check_controllers(p);
         check_ports(p);
         check_debugger(p);
     }

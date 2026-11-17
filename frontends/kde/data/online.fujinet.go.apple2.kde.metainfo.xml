@@ -9,8 +9,9 @@
     <p>
       An Apple II with FujiNet built in: mount disk images from TNFS servers
       or the local SD folder, configure everything through the embedded
-      FujiNet web UI, and play with automatic gamepad support driving the
-      analog paddles.
+      FujiNet web UI, and play with a Controllers window drawn like the Apple
+      joystick of the //e and //c (or two paddles) and an Apple //e keyboard,
+      with USB gamepads assigned to the game port.
     </p>
     <p>
       Emulation is provided by AppleWin, with FujiNet attached as a SmartPort
