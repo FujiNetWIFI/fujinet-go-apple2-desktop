@@ -49,6 +49,16 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.12.0" date="2026-11-17">
+      <description>
+        <p>
+          The Controllers window is drawn like the real Apple joysticks: the beige IIe joystick, or a platinum IIc one, with a proportional stick you drag. A Paddles view shows two Hand Controllers with knobs you drag or scroll. Held controls light up.
+        </p>
+        <p>
+          A new Apple II keyboard view (Keyboard check box) has latching Shift and Control, Caps Lock, and the Open and Solid Apple keys. USB gamepads can be assigned to the joystick or to Paddle 0 and Paddle 1, including plain HID joystick adapters, and the choice is remembered. There is a new Input page in the settings.
+        </p>
+      </description>
+    </release>
     <release version="0.11.0" date="2026-11-16">
       <description>
         <p>
