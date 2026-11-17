@@ -17,6 +17,9 @@ configure_file(app.manifest.in "${CMAKE_CURRENT_BINARY_DIR}/app.manifest" @ONLY)
 
 add_executable(fujinet-go-apple2-windows WIN32
   main.c
+  keys.c
+  prefs.c
+  controllers/controllers_window.c
   display.c
   debugger/dbg_window.c
   debugger/dbg_video.c
@@ -32,9 +35,12 @@ target_link_libraries(fujinet-go-apple2-windows PRIVATE
 # The debugger window talks to the shared engine (core/include/apple2debug.h).
 # CMAKE_CURRENT_BINARY_DIR is on the list for the RC compiler's sake: that is
 # where the generated app.manifest lands.
+# core/src: the Controllers window's Map mode talks to the binding table
+# (bindings.h, private to the session library).
 target_include_directories(fujinet-go-apple2-windows PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
-  "${CMAKE_CURRENT_BINARY_DIR}")
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  "${CMAKE_SOURCE_DIR}/core/src")
 target_compile_options(fujinet-go-apple2-windows PRIVATE -Wall -Wextra)
 
 # Bundle the MinGW runtime statically so the .exe has no loose DLL deps --

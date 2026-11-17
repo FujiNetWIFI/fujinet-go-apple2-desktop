@@ -6,8 +6,9 @@
  * whose render thread feeds the session's vsync phase-lock (the Windows
  * analog of the GTK frame clock / CVDisplayLink), full keyboard mapping, menus for the
  * machine and slot options, media and ROM import, and the FujiNet
- * configuration (default browser) and console-log windows. Gamepads are
- * handled inside the core's SDL thread.
+ * configuration (default browser) and console-log windows, and the
+ * Controllers window (F9) and Input settings. Gamepads are handled inside the
+ * core's SDL thread.
  *
  * Two things differ from the ADAM frontend this is modelled on:
  *
@@ -32,9 +33,12 @@
 #include <string.h>
 
 #include "apple2session.h"
+#include "controllers/controllers_window.h"
 #include "debugger/dbg_window.h"
 #include "display.h"
 #include "help/help_window.h"
+#include "keys.h"
+#include "prefs.h"
 #include "resource.h"
 
 #define APP_TITLE "FujiNet Go Apple II"
@@ -46,6 +50,11 @@ static HWND g_hwnd;
 static HWND g_log_window;
 static HWND g_log_edit;
 static HMENU g_menu;
+
+#define IDT_MAIN   10   /* 50 ms: system actions from the pads and keys, hot-plug notices */
+#define NOTICE_MS  4000
+static unsigned g_pad_generation;   /* the last gamepad generation shown */
+static DWORD g_notice_until;        /* GetTickCount() when the title notice ends, 0 none */
 
 static HWND g_display;
 static int g_aspect_mode;
@@ -69,113 +78,40 @@ static void layout_display(void)
 }
 
 /* ---- keyboard ------------------------------------------------------------
- * Everything is driven from WM_KEYDOWN/WM_KEYUP rather than WM_CHAR: the core
- * tracks Open Apple and Closed Apple as HELD modifiers, so every key needs a
- * matching release, and WM_CHAR has none. The printable character is obtained
- * from ToUnicode() instead, which applies the user's layout and shift state
- * exactly as TranslateMessage would have. */
-
-/* Win32 virtual key -> X11/xkb keysym, for the keys apple2_key_from_event
- * resolves by keycode rather than by character. */
-static uint32_t keysym_for_vk(WPARAM vk, LPARAM lparam)
-{
-    switch (vk) {
-    case VK_RETURN:
-        /* Numpad Enter sets the extended-key bit; both are Return here. */
-        return 0xFF0D;
-    case VK_ESCAPE:   return 0xFF1B;
-    case VK_TAB:      return 0xFF09;
-    case VK_BACK:     return 0xFF08;
-    case VK_DELETE:   return 0xFFFF;
-    case VK_LEFT:     return 0xFF51;
-    case VK_UP:       return 0xFF52;
-    case VK_RIGHT:    return 0xFF53;
-    case VK_DOWN:     return 0xFF54;
-    /* The Apple keys. Windows reports both Alts as VK_MENU and distinguishes
-     * them by the extended-key bit (bit 24 of lParam), which is set for the
-     * right-hand one. Left Alt is Open Apple, right Alt is Closed Apple. */
-    case VK_MENU:     return (lparam & (1 << 24)) ? 0xFFEA : 0xFFE9;
-    case VK_LMENU:    return 0xFFE9;
-    case VK_RMENU:    return 0xFFEA;
-    /* A Mac keyboard's Command keys land on the Windows keys, and they are
-     * physically the Apple keys. */
-    case VK_LWIN:     return 0xFFE7;
-    case VK_RWIN:     return 0xFFE8;
-    default:          return 0;
-    }
-}
-
-/* The character this key would type, ignoring Ctrl. Ctrl is masked out of the
- * keyboard state because ToUnicode would otherwise fold it into a control
- * code (Ctrl+A -> 0x01), and the mapping table wants the plain character --
- * it forces the character to 0 for Ctrl combos itself, after deriving the
- * keycode from it. */
-static uint32_t translated_char(WPARAM vk, LPARAM lparam)
-{
-    BYTE state[256];
-    WCHAR buf[8];
-    int n;
-
-    if (!GetKeyboardState(state))
-        return 0;
-    state[VK_CONTROL] = state[VK_LCONTROL] = state[VK_RCONTROL] = 0;
-    /* Alt is Open/Closed Apple, not a compose modifier. */
-    state[VK_MENU] = state[VK_LMENU] = state[VK_RMENU] = 0;
-
-    /* Flag bit 2 keeps ToUnicode from consuming pending dead-key state, so
-     * probing a keystroke here does not disturb the next one. */
-    n = ToUnicode((UINT)vk, (UINT)((lparam >> 16) & 0xFF), state, buf,
-                  (int)(sizeof(buf) / sizeof(buf[0])), 0x04);
-    return n > 0 ? (uint32_t)buf[0] : 0;
-}
+ * Everything is driven from WM_KEYDOWN/WM_KEYUP (keys.c): a bound key drives a
+ * controller target, every other key types on the Apple II, and Alt / the right
+ * Alt are the held Open and Closed Apple keys. */
 
 static void toggle_fullscreen(HWND hwnd);
 static void open_debugger(void);
+static void open_controllers(void);
+static void show_input_settings(void);
 
-static void forward_key(WPARAM vk, LPARAM lparam, int down)
+/* F9 / F11 / F12 are the app's own and never reach the controller bindings
+ * (Map mode refuses them); F10 stays with the system menu. */
+static int on_key(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
-    int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-    uint32_t unicode = 0;
-    uint32_t keysym = keysym_for_vk(vk, lparam);
+    const int press =
+        (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lp & (1 << 30));
 
-    if (keysym == 0) {
-        unicode = translated_char(vk, lparam);
-        keysym = unicode;
-    }
-    if (keysym == 0)
-        return;
-    apple2session_key(g_session, down, keysym, unicode, ctrl, shift);
-}
-
-static int on_keydown(HWND hwnd, WPARAM vk, LPARAM lparam)
-{
-    /* Auto-repeat (lParam bit 30 = key was already down): the core latches a
-     * key until the machine reads it, so a repeat storm would jam it. Let the
-     * Apple II's own repeat handle it. */
-    if (lparam & (1 << 30))
-        return 1;
-
-    switch (vk) {
+    switch (wp) {
     case VK_F10:
         return 0; /* let the system open the menu */
+    case VK_F9:
+        if (press) open_controllers();
+        return 1;
     case VK_F11:
-        toggle_fullscreen(hwnd);
+        if (press) toggle_fullscreen(hwnd);
         return 1;
     case VK_F12:
-        open_debugger();
+        if (press) open_debugger();
         return 1;
-    case VK_F4:
-        /* Alt+F4 stays a window close. */
-        if (GetKeyState(VK_MENU) & 0x8000)
-            return 0;
-        break;
     default:
-        break;
+        /* Map mode, when armed, takes the key before the machine does */
+        if (apple2_controllers_map_key(msg, wp, lp))
+            return 1;
+        return apple2_win_key_msg(g_session, msg, wp, lp);
     }
-
-    forward_key(vk, lparam, 1);
-    return 1;
 }
 
 /* ---- settings ------------------------------------------------------------ */
@@ -197,6 +133,54 @@ static void restart_session(void)
     if (apple2session_start(g_session, &opts) != 0)
         MessageBoxA(g_hwnd, apple2session_last_error(g_session), APP_TITLE,
                     MB_ICONWARNING);
+}
+
+/* A short notice in the title bar (there is no status bar): a gamepad
+ * hot-plug, a reset. */
+static void notice(const char *text)
+{
+    char title[400];
+    snprintf(title, sizeof(title), APP_TITLE " - %s", text);
+    apple2_set_text_utf8(g_hwnd, title);
+    g_notice_until = GetTickCount() + NOTICE_MS;
+    if (!g_notice_until) g_notice_until = 1;
+}
+
+static void notice_tick(void)
+{
+    if (!g_notice_until || (LONG)(GetTickCount() - g_notice_until) < 0) return;
+    g_notice_until = 0;
+    SetWindowTextA(g_hwnd, APP_TITLE);
+}
+
+/* Run the system actions the pads and bound keys posted: the UI thread only
+ * (a power cycle restarts FujiNet). Stop in Debugger shows the debugger first. */
+static void drain_sysactions(void)
+{
+    const unsigned posted = apple2session_sysaction_take(g_session);
+    int act;
+    for (act = 0; act < APPLE2SESSION_SYSACT_COUNT; act++) {
+        if (!(posted & (1u << act))) continue;
+        if (act == APPLE2SESSION_SYSACT_DEBUG_STOP)
+            apple2_debugger_show(g_hwnd, g_session);
+        apple2session_sysaction_fire(g_session, (apple2session_sysaction)act);
+        if (act == APPLE2SESSION_SYSACT_RESET) notice("Reset");
+        else if (act == APPLE2SESSION_SYSACT_POWER) notice("Power cycle");
+    }
+}
+
+/* Gamepad hot-plug: the session bumps a generation on every add/remove and
+ * keeps the last event as text; show it for a few seconds. */
+static void poll_gamepads(void)
+{
+    const unsigned gen = apple2session_gamepad_generation(g_session);
+    char text[160];
+    if (gen == g_pad_generation) return;
+    g_pad_generation = gen;
+    if (apple2session_gamepad_last_event(g_session, text, sizeof text) > 0)
+        notice(text);
+    apple2_controllers_window_refresh();
+    apple2_prefs_gamepads_changed();
 }
 
 /* ---- menus ---------------------------------------------------------------
@@ -325,6 +309,8 @@ static HMENU build_menu(void)
     AppendMenuA(view, MF_STRING, IDM_SCANLINES, "Scan&lines");
     AppendMenuA(view, MF_SEPARATOR, 0, NULL);
     AppendMenuA(view, MF_STRING, IDM_FULLSCREEN, "&Fullscreen\tF11");
+    AppendMenuA(view, MF_STRING, IDM_CONTROLLERS, "&Controllers\tF9");
+    AppendMenuA(view, MF_STRING, IDM_INPUT_SETTINGS, "&Input Settings...");
     AppendMenuA(view, MF_STRING, IDM_DEBUGGER, "&Debugger\tF12");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)view, "&View");
 
@@ -722,6 +708,25 @@ static void open_debugger(void)
     apple2_debugger_show(g_hwnd, g_session);
 }
 
+static void open_controllers(void)
+{
+    apple2_controllers_window_toggle(g_hwnd, g_session);
+}
+
+/* The settings that need the machine restarted wait for the window to close. */
+static void prefs_closed(int dirty)
+{
+    if (!dirty) return;
+    restart_session();
+    apple2_controllers_window_refresh();
+}
+
+static void show_input_settings(void)
+{
+    static const apple2_prefs_hooks hooks = { prefs_closed };
+    apple2_prefs_show(g_hwnd, g_session, &hooks);
+}
+
 /* ---- fullscreen ---------------------------------------------------------- */
 
 static void toggle_fullscreen(HWND hwnd)
@@ -805,6 +810,8 @@ static void on_command(HWND hwnd, UINT cmd)
         apple2_display_set_options(g_aspect_mode, g_smooth);
         break;
     case IDM_FULLSCREEN: toggle_fullscreen(hwnd); break;
+    case IDM_CONTROLLERS: open_controllers(); break;
+    case IDM_INPUT_SETTINGS: show_input_settings(); break;
     case IDM_DEBUGGER:   open_debugger(); break;
     case IDM_HELP: apple2_help_for(hwnd); break;
     case IDM_ABOUT: {
@@ -845,29 +852,38 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
-        if (on_keydown(hwnd, wp, lp))
-            return 0;
-        break;
     case WM_KEYUP:
     case WM_SYSKEYUP:
-        forward_key(wp, lp, 0);
-        return 0;
+        if (on_key(hwnd, msg, wp, lp))
+            return 0;
+        break;
     case WM_SYSCHAR:
         /* Alt is Open/Closed Apple, not a menu accelerator: swallow the
          * synthesised WM_SYSCHAR so Alt+key does not ding and does not
-         * activate the menu bar. F10 still opens it (see on_keydown). */
+         * activate the menu bar. F10 still opens it (see on_key). */
         return 0;
     case WM_KILLFOCUS:
         /* Releases are delivered to the focused window, so a chord that
          * loses focus mid-press (Alt+Tab, in particular) would leave Open
-         * Apple stuck down. Lift both Apple keys on the way out. */
+         * Apple stuck down. Lift both Apple keys on the way out, and every
+         * key a controller binding holds. */
+        apple2session_release_all(g_session);
         apple2session_key(g_session, 0, 0xFFE9, 0, 0, 0);
         apple2session_key(g_session, 0, 0xFFEA, 0, 0, 0);
+        return 0;
+    case WM_TIMER:
+        if (wp == IDT_MAIN) {
+            drain_sysactions();
+            poll_gamepads();
+            notice_tick();
+        }
         return 0;
     case WM_COMMAND:
         on_command(hwnd, LOWORD(wp));
         return 0;
     case WM_DESTROY:
+        apple2_prefs_abandon();
+        KillTimer(hwnd, IDT_MAIN);
         PostQuitMessage(0);
         return 0;
     }
@@ -928,10 +944,19 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     /* Developer affordance, matching the other frontends: open the debugger
      * alongside the main window, which is what you want when the app dies
      * before you can reach a menu. */
+    g_pad_generation = apple2session_gamepad_generation(g_session);
+    SetTimer(g_hwnd, IDT_MAIN, 50, NULL);
+    if (getenv("APPLE2_OPEN_CONTROLLERS"))
+        open_controllers();
+    if (getenv("APPLE2_OPEN_INPUT_SETTINGS"))
+        show_input_settings();
     if (getenv("APPLE2_OPEN_DEBUGGER"))
         open_debugger();
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
+        /* The Input settings are a dialog: its Tab and arrow keys come first. */
+        if (apple2_prefs_pretranslate(&msg))
+            continue;
         /* The debugger's F5/F7/F8 accelerators get first refusal while its
          * window (or one of its fields) has the focus. */
         if (apple2_debugger_pretranslate(&msg))
