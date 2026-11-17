@@ -23,7 +23,10 @@
 
 #include "apple2_host.h"
 #include "apple2debug.h"
+#include "bindings.h"
 #include "compat.h"
+#include "gamepad_sdl.h"
+#include "input.h"
 #include "session_internal.h"
 #include "sptrace.h"
 
@@ -480,10 +483,13 @@ apple2session *apple2session_new(const apple2session_paths *paths)
     pthread_mutex_init(&s->frame_cb_mtx, NULL);
     pthread_mutex_init(&s->vs_mtx, NULL);
     pthread_mutex_init(&s->start_mtx, NULL);
+    pthread_mutex_init(&s->sysact_mtx, NULL);
     apple2_cond_init_monotonic(&s->vs_cv);
     apple2_cond_init_monotonic(&s->start_cv);
 
     settings_init(s);
+    bindings_init(s);
+    apple2_input_attach(s);
     return s;
 }
 
@@ -491,6 +497,8 @@ void apple2session_free(apple2session *s)
 {
     if (!s) return;
     apple2session_stop(s);
+    apple2_gamepad_stop();   /* a session that never started a machine may still have pads */
+    apple2_input_detach(s);
     apple2session_settings_flush(s);
     settings_free_all(s);
     apple2debug_destroy(s->debugger);
@@ -500,6 +508,7 @@ void apple2session_free(apple2session *s)
     pthread_mutex_destroy(&s->frame_cb_mtx);
     pthread_mutex_destroy(&s->vs_mtx);
     pthread_mutex_destroy(&s->start_mtx);
+    pthread_mutex_destroy(&s->sysact_mtx);
     pthread_cond_destroy(&s->vs_cv);
     pthread_cond_destroy(&s->start_cv);
     free(s->frame);
@@ -547,7 +556,7 @@ void apple2session_default_opts(apple2session *s,
     opts->external_fujinet = apple2session_get_int(s, "fujinet_external", 0);
     opts->slip_listen = apple2session_get_str(s, "fujinet_external_addr", NULL);
     opts->enable_audio = 1;
-    opts->enable_gamepad = 1;
+    opts->enable_gamepad = apple2session_get_int(s, "enable_gamepad", 1);
 }
 
 int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
@@ -667,6 +676,10 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
             return -1;
         }
 
+        /* The core zeroed the host's axes and buttons as it started: hand it
+         * whatever is held (a key, a pad button, the stick) again. */
+        apple2_input_resync();
+
         /* An external FujiNet needs nothing started: it dials the listener
          * the card has just bound, and the emulator thread cold-boots the
          * machine when it does (link_reboot). */
@@ -689,7 +702,7 @@ int apple2session_start(apple2session *s, const apple2session_start_opts *opts)
     if (opts->enable_audio)
         audio_start(s);
     if (opts->enable_gamepad)
-        gamepad_start(s);
+        apple2_gamepad_start(s);
 
     pthread_mutex_unlock(&s->lifecycle_mtx);
     return 0;
@@ -718,7 +731,8 @@ void apple2session_stop(apple2session *s)
     pthread_join(s->emu_thread, NULL);
     s->emu_thread_started = 0;
     audio_stop(s);
-    gamepad_stop(s);
+    apple2_gamepad_stop();
+    apple2_input_clear_all();
     fujinet_stop(s);
     /* The Listener outlives the core (a process-wide singleton): nothing it
      * does may reach a session that is going away. */
@@ -750,6 +764,21 @@ void apple2session_key(apple2session *s, int down, uint32_t keysym,
     unsigned keycode = 0;
     uint32_t ch = 0;
     uint16_t mods = 0;
+
+    /* Alt, Meta and Super are the Open and Closed Apple keys: the core presses
+     * the buttons itself; this is for the Controllers window's held lights. */
+    switch (keysym) {
+    case APPLE2SESSION_KEYSYM_LALT: case APPLE2SESSION_KEYSYM_LMETA:
+    case APPLE2SESSION_KEYSYM_LSUPER:
+        apple2_input_apple_key(0, down);
+        break;
+    case APPLE2SESSION_KEYSYM_RALT: case APPLE2SESSION_KEYSYM_RMETA:
+    case APPLE2SESSION_KEYSYM_RSUPER:
+        apple2_input_apple_key(1, down);
+        break;
+    default:
+        break;
+    }
 
     if (!s->running) return;
     if (!apple2_key_from_event(keysym, unicode, ctrl_down, shift_down,
@@ -803,6 +832,70 @@ void apple2session_reset(apple2session *s, int mode)
     /* Latched here and applied by the emulator thread between frames. */
     s->reset_request = mode ? 2 : 1;
     pthread_mutex_unlock(&s->lifecycle_mtx);
+}
+
+/****************************************************************************/
+/** Controllers: mode, model, system actions                               **/
+/****************************************************************************/
+
+int apple2session_controller_mode(apple2session *s)
+{
+    (void)s;
+    return apple2_input_mode();
+}
+
+void apple2session_set_controller_mode(apple2session *s, int mode)
+{
+    mode = mode == APPLE2_MODE_PADDLES ? APPLE2_MODE_PADDLES : APPLE2_MODE_JOYSTICK;
+    apple2session_set_int(s, "controller_mode", mode);
+    apple2_input_set_mode(mode);
+}
+
+int apple2session_controller_model(apple2session *s)
+{
+    return apple2session_get_int(s, "controller_model", APPLE2_MODEL_IIE) ==
+                   APPLE2_MODEL_IIC ? APPLE2_MODEL_IIC : APPLE2_MODEL_IIE;
+}
+
+void apple2session_set_controller_model(apple2session *s, int model)
+{
+    apple2session_set_int(s, "controller_model",
+                          model == APPLE2_MODEL_IIC ? APPLE2_MODEL_IIC : APPLE2_MODEL_IIE);
+}
+
+int apple2session_controller_ports(apple2session *s)
+{
+    (void)s;
+    return apple2_input_mode() == APPLE2_MODE_PADDLES ? APPLE2SESSION_PADDLES : 1;
+}
+
+void apple2session_sysaction_fire(apple2session *s, apple2session_sysaction a)
+{
+    switch (a) {
+    case APPLE2SESSION_SYSACT_RESET:      apple2session_reset(s, 0); break;
+    case APPLE2SESSION_SYSACT_POWER:      apple2session_reset(s, 1); break;
+    case APPLE2SESSION_SYSACT_DEBUG_STOP: apple2debug_stop(apple2session_debugger(s)); break;
+    default: break;
+    }
+}
+
+void apple2session_sysaction_post(apple2session *s, apple2session_sysaction a)
+{
+    if ((int)a < 0 || a >= APPLE2SESSION_SYSACT_COUNT)
+        return;
+    pthread_mutex_lock(&s->sysact_mtx);
+    s->sysact_pending |= (1u << a);
+    pthread_mutex_unlock(&s->sysact_mtx);
+}
+
+unsigned apple2session_sysaction_take(apple2session *s)
+{
+    unsigned pending;
+    pthread_mutex_lock(&s->sysact_mtx);
+    pending = s->sysact_pending;
+    s->sysact_pending = 0;
+    pthread_mutex_unlock(&s->sysact_mtx);
+    return pending;
 }
 
 int apple2session_render_audio(apple2session *s, int16_t *out, int nsamples)

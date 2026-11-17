@@ -201,6 +201,12 @@ add_library(apple2session STATIC
   src/settings.c
   src/paths.c
   src/input_map.c
+  src/input.c
+  src/bindings.c
+  src/hid_keys.c
+  src/pad_assign.c
+  src/controls.c
+  src/keyboard.c
   src/audio_sdl.c
   src/gamepad_sdl.c
   src/fujinet_runtime.c
@@ -319,7 +325,49 @@ add_executable(sptrace_test tests/sptrace_test.c)
 target_link_libraries(sptrace_test apple2session)
 target_include_directories(sptrace_test PRIVATE debugger)
 
+# The controllers: the merged input layer, the binding table, the remembered
+# pad assignments and the pad layer. SDL virtual joysticks stand in for pads
+# (gamepad_layer_test SKIPs where there are none, or real pads are attached).
+add_executable(input_merge_test tests/input_merge_test.c)
+target_link_libraries(input_merge_test apple2session)
+target_include_directories(input_merge_test PRIVATE src)
+
+add_executable(bindings_test tests/bindings_test.c)
+target_link_libraries(bindings_test apple2session)
+target_include_directories(bindings_test PRIVATE src)
+
+add_executable(pad_assign_test tests/pad_assign_test.c)
+target_link_libraries(pad_assign_test apple2session)
+target_include_directories(pad_assign_test PRIVATE src)
+
+add_executable(gamepad_test tests/gamepad_test.c)
+target_link_libraries(gamepad_test apple2session)
+target_include_directories(gamepad_test PRIVATE src)
+
+add_executable(controls_test tests/controls_test.c)
+target_link_libraries(controls_test apple2session)
+
+add_executable(keyboard_test tests/keyboard_test.c)
+target_link_libraries(keyboard_test apple2session)
+target_include_directories(keyboard_test PRIVATE src)
+
+add_executable(controllers_run_test tests/controllers_run_test.c)
+target_link_libraries(controllers_run_test apple2session)
+
+add_executable(gamepad_layer_test tests/gamepad_layer_test.c)
+target_link_libraries(gamepad_layer_test apple2session)
+target_include_directories(gamepad_layer_test PRIVATE src)
+
 add_test(NAME input COMMAND input_test)
+add_test(NAME input_merge COMMAND input_merge_test)
+add_test(NAME bindings COMMAND bindings_test)
+add_test(NAME pad_assign COMMAND pad_assign_test)
+add_test(NAME gamepad COMMAND gamepad_test)
+add_test(NAME controls COMMAND controls_test)
+add_test(NAME keyboard COMMAND keyboard_test)
+add_test(NAME controllers_run COMMAND controllers_run_test)
+add_test(NAME gamepad_layer COMMAND gamepad_layer_test)
+set_tests_properties(gamepad_layer PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 add_test(NAME hostport COMMAND hostport_test)
 add_test(NAME help COMMAND help_test)
 add_test(NAME dasm COMMAND dasm_test)
@@ -337,7 +385,7 @@ add_test(NAME memtools COMMAND memtools_test)
 add_test(NAME vidtab COMMAND vidtab_test)
 add_test(NAME banks COMMAND bank_test)
 add_test(NAME banks_plus COMMAND bank_test "Apple ][+")
-set_tests_properties(boot_smoke debug_seam debug_seam_e debug_seam_plus debug_engine video vidtab banks banks_plus
+set_tests_properties(boot_smoke debug_seam debug_seam_e debug_seam_plus debug_engine video vidtab banks banks_plus controllers_run
                      PROPERTIES SKIP_RETURN_CODE 77)
 
 # Makes the COMPLIANCE.md claim checkable: a ROM-less build must not have any

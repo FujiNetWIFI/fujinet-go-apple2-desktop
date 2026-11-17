@@ -109,8 +109,15 @@ struct apple2session {
 
     /* ---- backends ---- */
     void *audio;   /* audio_sdl.c state */
-    void *gamepad; /* gamepad_sdl.c state */
     volatile int audio_mute;
+
+    /* ---- controllers ---- */
+    /* cross-thread system-action latch (see apple2session_sysaction_post) */
+    pthread_mutex_t sysact_mtx;
+    unsigned sysact_pending;
+    /* the gamepad thread has run for this session: a restart's first scan
+     * finds the same pads again without announcing them (gamepad_sdl.c) */
+    int pad_restarted;
 
     /* ---- FujiNet runtime (fujinet_runtime.c) ---- */
     int fujinet_loaded;  /* dlopen'd (kept for process lifetime) */
@@ -149,9 +156,8 @@ int  roms_dir_has_any_rom(const char *dir);
 int  audio_start(apple2session *s);
 void audio_stop(apple2session *s);
 
-/* gamepad_sdl.c */
-int  gamepad_start(apple2session *s);
-void gamepad_stop(apple2session *s);
+/* gamepad_sdl.c is private to its own header; input.c and bindings.c likewise
+ * (input.h, bindings.h, gamepad_sdl.h). */
 
 /* debugger.c -- all emulator-thread side except create/destroy. */
 apple2debug *apple2debug_create(apple2session *s);
