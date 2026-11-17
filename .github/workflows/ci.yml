@@ -582,6 +582,11 @@ jobs:
       # is where release notes belong). A tag that disagrees with them would
       # ship packages whose About box contradicts the download, so stop here
       # instead -- delete the tag, fix the version, tag again.
+      # gh runs git inside the container, which refuses the workspace as
+      # "dubious ownership" without this -- and the publish step then fails
+      # after every build has succeeded.
+      - name: Mark the workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Check the tag matches the declared version
         run: |
           tag="${GITHUB_REF#refs/tags/v}"
