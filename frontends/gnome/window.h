@@ -23,8 +23,22 @@ void apple2_window_restart_session(Apple2Window *self);
  * one running out of the build tree. */
 const char *apple2_icon_name(void);
 
-/* The Help context the main window shows now: "main", or "prefs/Machine"
+/* The Help context the main window shows now: "main", or "prefs/<page>"
  * while Preferences are open. */
 const char *apple2_window_help_context(Apple2Window *self);
+
+/* The one key path: the main window and the Controllers window both end here,
+ * so Map mode, the bindings, F9 (Controllers), F10, F11, F12 and the machine's
+ * keys behave the same whichever has the focus. The Alt keys are the Open and
+ * Closed Apple keys and reach the machine. Returns whether the key was
+ * consumed. */
+gboolean apple2_window_key(Apple2Window *self, guint keyval, guint keycode,
+                           GdkModifierType state, gboolean down);
+/* Lets go of every key the keyboard holds (focus lost). */
+void apple2_window_release_keys(Apple2Window *self);
+/* A console action (Reset, Power Cycle, Stop in Debugger) from a key, a pad
+ * button or the Controllers window, with the same feedback as the Machine menu.
+ * UI thread. */
+void apple2_window_run_sysaction(Apple2Window *self, int sysact);
 
 G_END_DECLS

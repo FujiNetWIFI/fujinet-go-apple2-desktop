@@ -13,6 +13,7 @@ endif()
 set(GNOME_SOURCES
   main.c
   window.c
+  controllers/controllers_window.c
   display.c
   prefs.c
   webview.c
@@ -26,6 +27,8 @@ set(GNOME_APP_ID online.fujinet.go.apple2.gnome)
 add_executable(fujinet-go-apple2-gnome ${GNOME_SOURCES})
 target_link_libraries(fujinet-go-apple2-gnome PRIVATE apple2session PkgConfig::ADW)
 target_compile_options(fujinet-go-apple2-gnome PRIVATE -Wall -Wextra)
+# bindings.h is the session's private header, which the Controllers window's Map mode uses
+target_include_directories(fujinet-go-apple2-gnome PRIVATE ${CMAKE_SOURCE_DIR}/core/src)
 target_compile_definitions(fujinet-go-apple2-gnome PRIVATE
   APPLE2_APP_ID="${GNOME_APP_ID}"
   # Uninstalled runs fall back to the in-tree icon theme (apple2_icon_name).

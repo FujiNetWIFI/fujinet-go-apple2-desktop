@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "controllers/controllers_window.h"
 #include "debugger/dbg_window.h"
 #include "display.h"
 #include "prefs.h"
@@ -26,6 +27,7 @@ struct _Apple2Window {
     Apple2Display *display;
     AdwToastOverlay *toasts;
     GtkMenuButton *menu_button;
+    unsigned pad_generation;       /* the pad set the last toast was for */
 };
 
 G_DEFINE_FINAL_TYPE(Apple2Window, apple2_window, ADW_TYPE_APPLICATION_WINDOW)
@@ -76,12 +78,114 @@ static gboolean forward_key(Apple2Window *self, guint keyval,
     return TRUE;
 }
 
-/* The Help context the main window shows now: "main", or "prefs/Machine"
+/* A console action from a key, a pad button or the Controllers window, with the
+ * same feedback as the Machine menu. UI thread. */
+void apple2_window_run_sysaction(Apple2Window *self, int sysact)
+{
+    switch (sysact) {
+    case APPLE2SESSION_SYSACT_RESET:
+        apple2session_sysaction_fire(self->session, APPLE2SESSION_SYSACT_RESET);
+        apple2_window_toast(self, "Reset");
+        break;
+    case APPLE2SESSION_SYSACT_POWER:
+        apple2session_sysaction_fire(self->session, APPLE2SESSION_SYSACT_POWER);
+        apple2_window_toast(self, "Power cycled");
+        break;
+    case APPLE2SESSION_SYSACT_DEBUG_STOP:
+        /* open the debugger first so the stop has somewhere to show */
+        apple2_debugger_show(GTK_WINDOW(self), self->session);
+        apple2session_sysaction_fire(self->session, APPLE2SESSION_SYSACT_DEBUG_STOP);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Everything posted since the last look (a bound key or a gamepad button posts
+ * it; the gamepad thread cannot call into the toolkit). */
+static void drain_sysactions(Apple2Window *self)
+{
+    unsigned pending = apple2session_sysaction_take(self->session);
+    int act;
+    for (act = 0; act < APPLE2SESSION_SYSACT_COUNT; act++)
+        if (pending & (1u << act))
+            apple2_window_run_sysaction(self, act);
+}
+
+/* The one key path (see window.h). The keysym names the PHYSICAL key (evdev =
+ * GTK keycode - 8), so NumLock and Shift change nothing for the bindings. */
+gboolean apple2_window_key(Apple2Window *self, guint keyval, guint keycode,
+                           GdkModifierType state, gboolean down)
+{
+    const uint32_t keysym = apple2session_keysym_from_evdev(keycode >= 8 ? keycode - 8 : 0);
+    const int ctrl = (state & GDK_CONTROL_MASK) != 0;
+
+    if (!down) {
+        /* A release always reaches the session: it clears exactly what the
+         * press asserted, even if Map mode was armed in between. Map only
+         * keeps the release of the key it took out of the machine's way. */
+        const gboolean released = apple2session_input_key(self->session, keysym, 0, ctrl) != 0;
+        if (apple2_controllers_map_key(keyval, keycode, state, FALSE))
+            return TRUE;
+        if (keyval == GDK_KEY_F9 || keyval == GDK_KEY_F10 || keyval == GDK_KEY_F11 ||
+            keyval == GDK_KEY_F12)
+            return TRUE;
+        if (released)
+            return TRUE;
+        return forward_key(self, keyval, state, 0);
+    }
+
+    /* Map capture, then the bindings (Ctrl chords are never bound) */
+    if (apple2_controllers_map_key(keyval, keycode, state, TRUE))
+        return TRUE;
+    if (apple2session_input_key(self->session, keysym, 1, ctrl)) {
+        drain_sysactions(self);
+        return TRUE;
+    }
+
+    /* The window's own keys, deliberately not bindable: they are how you
+     * reach the panels that do the binding. */
+    switch (keyval) {
+    case GDK_KEY_F9:
+        apple2_controllers_toggle(GTK_WINDOW(self), self->session);
+        return TRUE;
+    case GDK_KEY_F10: /* open the primary menu */
+        gtk_menu_button_popup(self->menu_button);
+        return TRUE;
+    case GDK_KEY_F11:
+        if (gtk_window_is_fullscreen(GTK_WINDOW(self)))
+            gtk_window_unfullscreen(GTK_WINDOW(self));
+        else
+            gtk_window_fullscreen(GTK_WINDOW(self));
+        return TRUE;
+    case GDK_KEY_F12:
+        gtk_widget_activate_action(GTK_WIDGET(self), "win.debugger", NULL);
+        return TRUE;
+    default:
+        break;
+    }
+    return forward_key(self, keyval, state, 1);
+}
+
+/* Lets go of every key the keyboard holds (the mouse's and the pads' holds are
+ * their own sources). */
+void apple2_window_release_keys(Apple2Window *self)
+{
+    apple2session_release_all(self->session);
+}
+
+/* The Help context the main window shows now: "main", or "prefs/<page>"
  * while Preferences are open. */
 const char *apple2_window_help_context(Apple2Window *self)
 {
     AdwDialog *d = adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(self));
-    return d && ADW_IS_PREFERENCES_DIALOG(d) ? "prefs/Machine" : "main";
+    if (d && ADW_IS_PREFERENCES_DIALOG(d)) {
+        static char ctx[64];
+        const char *page = adw_preferences_dialog_get_visible_page_name(ADW_PREFERENCES_DIALOG(d));
+        g_snprintf(ctx, sizeof ctx, "prefs/%s", page ? page : "Machine");
+        return ctx;
+    }
+    return "main";
 }
 
 /* app.help: every window's Ctrl+Shift+H, for what it shows. Not a cast of
@@ -102,7 +206,6 @@ static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
 {
     Apple2Window *self = APPLE2_WINDOW(user_data);
     (void)controller;
-    (void)keycode;
 
     /* F1 is an APPLE2 function key in the window itself, and Help while
      * Preferences or another dialog is open */
@@ -111,38 +214,23 @@ static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
         apple2_help_for(GTK_WINDOW(self));
         return TRUE;
     }
-
-    switch (keyval) {
-    case GDK_KEY_F10: /* open the primary menu */
-        gtk_menu_button_popup(self->menu_button);
-        return TRUE;
-    case GDK_KEY_F11:
-        if (gtk_window_is_fullscreen(GTK_WINDOW(self)))
-            gtk_window_unfullscreen(GTK_WINDOW(self));
-        else
-            gtk_window_fullscreen(GTK_WINDOW(self));
-        return TRUE;
-    case GDK_KEY_F12:
-        gtk_widget_activate_action(GTK_WIDGET(self), "win.debugger", NULL);
-        return TRUE;
-    default:
-        break;
-    }
-
-    return forward_key(self, keyval, state, 1);
+    return apple2_window_key(self, keyval, keycode, state, TRUE);
 }
 
 static void on_key_released(GtkEventControllerKey *controller, guint keyval,
                             guint keycode, GdkModifierType state,
                             gpointer user_data)
 {
-    Apple2Window *self = APPLE2_WINDOW(user_data);
     (void)controller;
-    (void)keycode;
-    if (keyval == GDK_KEY_F10 || keyval == GDK_KEY_F11 ||
-        keyval == GDK_KEY_F12)
-        return;
-    forward_key(self, keyval, state, 0);
+    apple2_window_key(APPLE2_WINDOW(user_data), keyval, keycode, state, FALSE);
+}
+
+static void on_focus_leave(GtkEventControllerFocus *controller,
+                           gpointer user_data)
+{
+    (void)controller;
+    /* a held key never gets its release event once focus is gone */
+    apple2_window_release_keys(APPLE2_WINDOW(user_data));
 }
 
 /* ---- actions ------------------------------------------------------------ */
@@ -153,8 +241,7 @@ static void action_reset(GSimpleAction *action, GVariant *param,
     Apple2Window *self = APPLE2_WINDOW(user_data);
     (void)action;
     (void)param;
-    apple2session_reset(self->session, 0);
-    apple2_window_toast(self, "Reset");
+    apple2_window_run_sysaction(self, APPLE2SESSION_SYSACT_RESET);
 }
 
 static void action_power_cycle(GSimpleAction *action, GVariant *param,
@@ -163,8 +250,16 @@ static void action_power_cycle(GSimpleAction *action, GVariant *param,
     Apple2Window *self = APPLE2_WINDOW(user_data);
     (void)action;
     (void)param;
-    apple2session_reset(self->session, 1);
-    apple2_window_toast(self, "Power cycled");
+    apple2_window_run_sysaction(self, APPLE2SESSION_SYSACT_POWER);
+}
+
+static void action_controllers(GSimpleAction *action, GVariant *param,
+                               gpointer user_data)
+{
+    Apple2Window *self = APPLE2_WINDOW(user_data);
+    (void)action;
+    (void)param;
+    apple2_controllers_toggle(GTK_WINDOW(self), self->session);
 }
 
 static void import_done(GObject *source, GAsyncResult *result,
@@ -358,6 +453,7 @@ static GMenu *build_menu(void)
     g_menu_append(fujinet, "FujiNet Console Log…", "win.fujinet-log");
     g_menu_append_section(menu, "FujiNet", G_MENU_MODEL(fujinet));
 
+    g_menu_append(view, "Controllers (F9)", "win.controllers");
     g_menu_append(view, "Debugger (F12)", "win.debugger");
     g_menu_append_section(menu, "View", G_MENU_MODEL(view));
 
@@ -381,6 +477,7 @@ static const GActionEntry win_actions[] = {
     {.name = "import-roms", .activate = action_import_roms},
     {.name = "fujinet-config", .activate = action_fujinet_config},
     {.name = "fujinet-log", .activate = action_fujinet_log},
+    {.name = "controllers", .activate = action_controllers},
     {.name = "debugger", .activate = action_debugger},
     {.name = "preferences", .activate = action_preferences},
     {.name = "about", .activate = action_about},
@@ -394,6 +491,24 @@ static void apple2_window_class_init(Apple2WindowClass *klass)
 static void apple2_window_init(Apple2Window *self)
 {
     (void)self;
+}
+
+/* Every 50 ms: the console actions the gamepad thread posted (it cannot call
+ * into the toolkit), and a toast when a pad comes or goes. */
+static gboolean sysact_drain_tick(gpointer user_data)
+{
+    Apple2Window *self = APPLE2_WINDOW(user_data);
+    unsigned gen;
+
+    drain_sysactions(self);
+    gen = apple2session_gamepad_generation(self->session);
+    if (gen != self->pad_generation) {
+        char text[160];
+        self->pad_generation = gen;
+        if (apple2session_gamepad_last_event(self->session, text, sizeof text) > 0)
+            apple2_window_toast(self, text);
+    }
+    return G_SOURCE_CONTINUE;
 }
 
 GtkWidget *apple2_window_new(AdwApplication *app, apple2session *session)
@@ -445,12 +560,27 @@ GtkWidget *apple2_window_new(AdwApplication *app, apple2session *session)
     g_signal_connect(keys, "key-released", G_CALLBACK(on_key_released), self);
     gtk_widget_add_controller(GTK_WIDGET(self), keys);
 
+    {
+        GtkEventController *focus = gtk_event_controller_focus_new();
+        g_signal_connect(focus, "leave", G_CALLBACK(on_focus_leave), self);
+        gtk_widget_add_controller(GTK_WIDGET(self), focus);
+    }
+
+    /* The current pad set is the baseline: no toast for pads already plugged
+     * in at launch. */
+    self->pad_generation = apple2session_gamepad_generation(session);
+    g_timeout_add(50, sysact_drain_tick, self);
+
     apply_display_settings(self);
     gtk_widget_grab_focus(GTK_WIDGET(self->display));
 
     /* Developer affordance: open the debugger alongside the main window,
      * which is what you want when the app dies before you can reach a menu. */
+    if (getenv("APPLE2_OPEN_CONTROLLERS") || getenv("APPLE2_OPEN_KEYPAD"))
+        apple2_controllers_toggle(GTK_WINDOW(self), session);
     if (getenv("APPLE2_OPEN_DEBUGGER"))
         apple2_debugger_show(GTK_WINDOW(self), session);
+    if (getenv("APPLE2_OPEN_PREFS"))
+        apple2_prefs_show(self, session, apply_display_settings);
     return GTK_WIDGET(self);
 }
