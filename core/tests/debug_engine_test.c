@@ -45,10 +45,22 @@ static void on_stop(void *user, int kind, uint16_t pc)
     g_stops++;
 }
 
+/* The stop callback fires on the emulator thread just AFTER the engine reports
+ * stopped, so a check of g_last_kind straight after is_stopped can see the old
+ * value (seen once on a slow Windows runner). Once stopped, give the callback a
+ * moment to land: g_stops_seen is how many callbacks earlier waits accounted for. */
+static int g_stops_seen;
+
 static int wait_stopped(apple2debug *d, int ms)
 {
     while (ms > 0) {
-        if (apple2debug_is_stopped(d)) return 1;
+        if (apple2debug_is_stopped(d)) {
+            int grace = 500;               /* up to 1 s */
+            while (g_stops <= g_stops_seen && grace-- > 0)
+                usleep(2000);
+            g_stops_seen = g_stops;
+            return 1;
+        }
         usleep(2000);
         ms -= 2;
     }
