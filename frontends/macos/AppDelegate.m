@@ -19,6 +19,8 @@
 #import <WebKit/WebKit.h>
 
 #import "DisplayView.h"
+#import "InputSettings.h"
+#import "controllers/ControllersWindow.h"
 #import "help/HelpWindow.h"
 #import "debugger/DebuggerWindow.h"
 
@@ -63,7 +65,9 @@ static const option_row kOptionRows[] = {
 };
 #define OPTION_ROW_COUNT ((int)(sizeof(kOptionRows) / sizeof(kOptionRows[0])))
 
-@interface AppDelegate () <NSWindowDelegate, WKUIDelegate>
+#define TOAST_SECONDS 2.5
+
+@interface AppDelegate () <NSWindowDelegate, WKUIDelegate, NSTabViewDelegate>
 @end
 
 @implementation AppDelegate {
@@ -78,6 +82,13 @@ static const option_row kOptionRows[] = {
     NSWindow *_settingsWindow;
     BOOL _machineDirty;
     NSTextField *_externalField;
+    Apple2ControllersWindow *_controllers;
+    Apple2InputPane *_inputPane;     /* the Settings window's Input tab */
+    NSTextField *_toast;             /* over the picture, fades */
+    unsigned _toastGeneration;       /* the pad generation already toasted */
+    NSUInteger _toastSerial;
+    NSTimer *_sysactTimer;           /* console actions a gamepad or key posted, pad toasts */
+    id _keyMonitor;                  /* F9 in the machine window */
 }
 
 - (instancetype)initWithSession:(apple2session *)session
@@ -110,13 +121,13 @@ static const option_row kOptionRows[] = {
 - (void)resetMachine:(id)sender
 {
     (void)sender;
-    apple2session_reset(_session, 0);
+    [self runSysaction:APPLE2SESSION_SYSACT_RESET];
 }
 
 - (void)powerCycle:(id)sender
 {
     (void)sender;
-    apple2session_reset(_session, 1);
+    [self runSysaction:APPLE2SESSION_SYSACT_POWER];
 }
 
 - (void)importDiskImage:(id)sender
@@ -559,7 +570,7 @@ static const option_row kOptionRows[] = {
     root.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
 
     _settingsWindow = [[NSWindow alloc]
-        initWithContentRect:NSMakeRect(0, 0, 560, 480)
+        initWithContentRect:NSMakeRect(0, 0, 660, 580)
                   styleMask:NSWindowStyleMaskTitled |
                             NSWindowStyleMaskClosable |
                             NSWindowStyleMaskMiniaturizable
@@ -569,25 +580,77 @@ static const option_row kOptionRows[] = {
     _settingsWindow.releasedWhenClosed = NO;
     _settingsWindow.delegate = self;
     {
-        /* the settings over a strip with the Help button */
+        /* two tabs: the machine's options over a strip with the Help button,
+         * and Input (gamepads and the controller) */
         NSButton *helpBtn = Apple2HelpButton(@"prefs/Machine");
         NSStackView *wrap = [NSStackView stackViewWithViews:@[root, helpBtn]];
         wrap.orientation = NSUserInterfaceLayoutOrientationVertical;
         wrap.alignment = NSLayoutAttributeLeading;
         wrap.edgeInsets = NSEdgeInsetsMake(0, 16, 12, 16);
-        _settingsWindow.contentView = wrap;
+        const NSSize fit = [wrap fittingSize];
+        const CGFloat machineH = fit.height > 330 ? fit.height : 330;
+        NSView *machineView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 640, machineH)];
+        [wrap setFrame:NSMakeRect(0, machineH - fit.height, fit.width, fit.height)];
+        /* AppKit resizes a tab's view to the tab; the options stay at the top */
+        [wrap setAutoresizingMask:NSViewMinYMargin];
+        [machineView addSubview:wrap];
+
+        __weak AppDelegate *weakSelf = self;
+        [_inputPane stop];
+        _inputPane = [[Apple2InputPane alloc]
+            initWithSession:_session
+                   controls:^(BOOL open) {
+                       AppDelegate *strong = weakSelf;
+                       if (!strong) return;
+                       if (open) {
+                           [strong->_controllers show];
+                       } else {
+                           [strong->_controllers refresh];
+                           [strong showToast:@"Default controls restored"];
+                       }
+                   }
+                    changed:^{
+                        AppDelegate *strong = weakSelf;
+                        if (strong) [strong->_controllers refresh];
+                    }
+                    restart:^{
+                        AppDelegate *strong = weakSelf;
+                        if (strong) strong->_machineDirty = YES;
+                    }];
+
+        NSTabView *tabs = [[NSTabView alloc] initWithFrame:NSMakeRect(0, 0, 660, 580)];
+        tabs.delegate = self;
+        NSTabViewItem *machineItem = [[NSTabViewItem alloc] initWithIdentifier:@"machine"];
+        machineItem.label = @"Machine";
+        machineItem.view = machineView;
+        [tabs addTabViewItem:machineItem];
+        NSTabViewItem *inputItem = [[NSTabViewItem alloc] initWithIdentifier:@"input"];
+        inputItem.label = @"Input";
+        inputItem.view = _inputPane.view;
+        [tabs addTabViewItem:inputItem];
+        _settingsWindow.contentView = tabs;
         Apple2SetHelpContext(_settingsWindow, @"prefs/Machine");
     }
     [_settingsWindow center];
     [_settingsWindow makeKeyAndOrderFront:nil];
 }
 
+/* Command+? and the Help button follow the tab. */
+- (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)item
+{
+    (void)tabView;
+    Apple2SetHelpContext(_settingsWindow, [item.identifier isEqual:@"input"] ? @"prefs/Input" : @"prefs/Machine");
+}
+
 /* Machine options are collected while the window is open and applied in one
  * restart when it closes. */
 - (void)windowWillClose:(NSNotification *)note
 {
-    if (note.object == _settingsWindow)
+    if (note.object == _settingsWindow) {
         [_settingsWindow makeFirstResponder:nil]; /* commit a field edit */
+        [_inputPane stop];
+        _inputPane = nil;
+    }
     if (note.object != _settingsWindow || !_machineDirty)
         return;
     _machineDirty = NO;
@@ -695,6 +758,7 @@ static const option_row kOptionRows[] = {
                               keyEquivalent:@"f"];
     fs.keyEquivalentModifierMask =
         NSEventModifierFlagControl | NSEventModifierFlagCommand;
+    [view addItem:[self item:@"Controllers" action:@selector(toggleControllers:) key:@"k"]];
     NSMenuItem *dbg = [self item:@"Debugger"
                           action:@selector(showDebugger:)
                              key:[NSString stringWithFormat:@"%C",
@@ -781,6 +845,10 @@ static const option_row kOptionRows[] = {
     _display.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _display.frame = ((NSView *)_window.contentView).bounds;
     [_window.contentView addSubview:_display];
+    /* layer-backed, so the display's layer and the toast over it composite in
+     * the order they were added */
+    ((NSView *)_window.contentView).wantsLayer = YES;
+    [self buildToast:_window.contentView];
     [self applyDisplaySettings];
 
     [_window center];
@@ -788,15 +856,144 @@ static const option_row kOptionRows[] = {
     [_window makeFirstResponder:_display];
     [_display start];
 
-    /* Developer affordance shared with the other frontends. */
+    __weak AppDelegate *weakSelf = self;
+    _controllers = [[Apple2ControllersWindow alloc]
+        initWithSession:_session
+                appKeys:^BOOL(uint32_t keysym) { return [weakSelf handleAppKey:keysym]; }];
+    _controllers.sysactionHandler = ^(int sysact) { [weakSelf runSysaction:sysact]; };
+    /* No toast for the pads already attached at launch. */
+    _toastGeneration = apple2session_gamepad_generation(_session);
+
+    /* Console actions a gamepad button or a bound key posted (those threads
+     * cannot touch AppKit) and pads coming and going: well inside 50 ms. */
+    _sysactTimer = [NSTimer scheduledTimerWithTimeInterval:0.05
+        repeats:YES block:^(NSTimer *tmr) { (void)tmr; [weakSelf sysactTick]; }];
+    _sysactTimer.tolerance = 0.01;
+
+    /* F9 in the machine window opens the Controllers panel (the panel handles
+     * its own F9; the debugger keeps F9 for breakpoints). */
+    _keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+        handler:^NSEvent *(NSEvent *evt) {
+            AppDelegate *strong = weakSelf;
+            if (strong && evt.window == strong->_window && !evt.isARepeat &&
+                !(evt.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl |
+                                       NSEventModifierFlagOption | NSEventModifierFlagShift)) &&
+                apple2session_keysym_from_macos_keycode(evt.keyCode) == APPLE2SESSION_KEYSYM_F9) {
+                [strong->_controllers toggle];
+                return nil;
+            }
+            return evt;
+        }];
+
+    /* Developer affordances shared with the other frontends. */
     if (getenv("APPLE2_OPEN_DEBUGGER"))
         [DebuggerWindow showForSession:_session];
+    if (getenv("APPLE2_OPEN_CONTROLLERS"))
+        [_controllers toggle];
+}
+
+/* ---- Controllers window -------------------------------------------------------- */
+
+- (void)toggleControllers:(id)sender
+{
+    (void)sender;
+    [_controllers toggle];
+}
+
+/* The toast: a label over the top of the picture that fades. */
+- (void)buildToast:(NSView *)content
+{
+    _toast = [NSTextField labelWithString:@""];
+    _toast.font = [NSFont boldSystemFontOfSize:13];
+    _toast.textColor = NSColor.whiteColor;
+    _toast.drawsBackground = YES;
+    _toast.backgroundColor = [NSColor colorWithWhite:0.0 alpha:0.7];
+    _toast.alignment = NSTextAlignmentCenter;
+    _toast.alphaValue = 0.0;
+    [_toast setFrame:NSMakeRect(0, content.bounds.size.height - 34, content.bounds.size.width, 26)];
+    [_toast setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
+    [content addSubview:_toast];
+}
+
+- (void)showToast:(NSString *)text
+{
+    if (!text) return;
+    _toast.stringValue = text;
+    _toast.alphaValue = 1.0;
+    const NSUInteger serial = ++_toastSerial;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(TOAST_SECONDS * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        /* a newer message restarts the clock */
+        if (serial != self->_toastSerial) return;
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+            ctx.duration = 0.5;
+            self->_toast.animator.alphaValue = 0.0;
+        } completionHandler:nil];
+    });
+}
+
+/* A console action (APPLE2SESSION_SYSACT_*) run on the UI thread, from the
+ * panel, a menu, a bound key or a gamepad button. */
+- (void)runSysaction:(int)sysact
+{
+    switch (sysact) {
+    case APPLE2SESSION_SYSACT_RESET:
+        apple2session_sysaction_fire(_session, APPLE2SESSION_SYSACT_RESET);
+        [self showToast:@"Reset"];
+        break;
+    case APPLE2SESSION_SYSACT_POWER:
+        apple2session_sysaction_fire(_session, APPLE2SESSION_SYSACT_POWER);
+        [self showToast:@"Power cycle"];
+        break;
+    case APPLE2SESSION_SYSACT_DEBUG_STOP:
+        apple2session_sysaction_fire(_session, APPLE2SESSION_SYSACT_DEBUG_STOP);
+        [DebuggerWindow showForSession:_session];
+        break;
+    default:
+        break;
+    }
+}
+
+/* What the 50 ms timer does: the console actions a gamepad button or a bound
+ * key posted, and a toast when a gamepad came or went. */
+- (void)sysactTick
+{
+    const unsigned pending = apple2session_sysaction_take(_session);
+    for (int act = 0; act < APPLE2SESSION_SYSACT_COUNT; act++)
+        if (pending & (1u << act)) [self runSysaction:act];
+    const unsigned gen = apple2session_gamepad_generation(_session);
+    if (gen != _toastGeneration) {
+        _toastGeneration = gen;
+        char msg[160];
+        if (apple2session_gamepad_last_event(_session, msg, (int)sizeof msg) > 0)
+            [self showToast:@(msg)];
+    }
+}
+
+/* F9 and F12 are the app's and not bindable; called with a key typed in the
+ * Controllers panel. YES when taken. */
+- (BOOL)handleAppKey:(uint32_t)keysym
+{
+    if (keysym == APPLE2SESSION_KEYSYM_F9) {
+        [_controllers toggle];
+        return YES;
+    }
+    if (keysym == APPLE2SESSION_KEYSYM_F12) {
+        [DebuggerWindow toggleForSession:_session];
+        return YES;
+    }
+    return NO;
 }
 
 - (void)applicationWillTerminate:(NSNotification *)note
 {
     (void)note;
     [_logTimer invalidate];
+    [_sysactTimer invalidate];
+    if (_keyMonitor) {
+        [NSEvent removeMonitor:_keyMonitor];
+        _keyMonitor = nil;
+    }
     [_display stop];
     if (_activity) {
         [[NSProcessInfo processInfo] endActivity:_activity];

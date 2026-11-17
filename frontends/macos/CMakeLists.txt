@@ -11,7 +11,10 @@ enable_language(OBJC)
 add_executable(fujinet-go-apple2-macos MACOSX_BUNDLE
   main.m
   AppDelegate.m
+  Apple2KeyForward.m
+  InputSettings.m
   DisplayView.m
+  controllers/ControllersWindow.m
   help/HelpWindow.m
   debugger/DebuggerWindow.m
   debugger/VideoTab.m
@@ -29,8 +32,11 @@ target_link_libraries(fujinet-go-apple2-macos PRIVATE
   "-framework UniformTypeIdentifiers"
   "-framework WebKit"
 )
+# core/src for bindings.h, the Controllers panel's Map mode (private to the
+# session, like the GNOME, KDE and Windows frontends).
 target_include_directories(fujinet-go-apple2-macos PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}")
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_SOURCE_DIR}/core/src")
 target_compile_options(fujinet-go-apple2-macos PRIVATE -Wall -Wextra -fobjc-arc)
 
 # App icon (rendered from the Android app's launcher art by

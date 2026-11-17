@@ -11,6 +11,10 @@
 
 #include "apple2session.h"
 
+/* The keyboard path the machine window and the Controllers panel share
+ * (DisplayExtras.inc forwards keys through it). */
+#import "Apple2KeyForward.h"
+
 #define FN_VIEW      DisplayView
 #define FN_SESSION   apple2session
 #define FN_FB_W      APPLE2SESSION_FB_MAX_WIDTH

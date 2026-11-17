@@ -38,45 +38,12 @@
     return YES;
 }
 
-/* macOS unichar (charactersIgnoringModifiers) -> X11/xkb keysym, for the keys
- * apple2_key_from_event resolves by keycode rather than by character. */
-static uint32_t keysymForChar(unichar c)
-{
-    switch (c) {
-    case NSUpArrowFunctionKey:    return 0xFF52;
-    case NSDownArrowFunctionKey:  return 0xFF54;
-    case NSLeftArrowFunctionKey:  return 0xFF51;
-    case NSRightArrowFunctionKey: return 0xFF53;
-    case NSDeleteFunctionKey:     return 0xFFFF; /* forward delete */
-    case 0x7F:                    return 0xFF08; /* the key marked Delete */
-    case 0x0D: case 0x03:         return 0xFF0D; /* Return, Enter */
-    case 0x09:                    return 0xFF09;
-    case 0x1B:                    return 0xFF1B;
-    default:                      return 0;
-    }
-}
-
+/* Keys go through the shared path (Apple2KeyForward.m): Map capture, then the
+ * bindings (a bound key drives the joystick or a paddle), then what the
+ * Apple II always did -- the character typed, or a special key. */
 - (void)forwardKey:(NSEvent *)event down:(int)down
 {
-    NSString *chars = event.charactersIgnoringModifiers;
-    unichar c = chars.length ? [chars characterAtIndex:0] : 0;
-    const BOOL ctrl = (event.modifierFlags & NSEventModifierFlagControl) != 0;
-    const BOOL shift = (event.modifierFlags & NSEventModifierFlagShift) != 0;
-
-    uint32_t keysym = keysymForChar(c);
-    uint32_t unicode = 0;
-    if (!keysym) {
-        /* charactersIgnoringModifiers already drops Ctrl, so this is the
-         * plain character the mapping table wants; the function-key range
-         * (0xF700+) is not a character at all. */
-        if (c >= 0x20 && c < 0xF700)
-            unicode = c;
-        keysym = unicode;
-    }
-    if (!keysym)
-        return;
-    apple2session_key(_session, down, keysym, unicode, ctrl ? 1 : 0,
-                      shift ? 1 : 0);
+    Apple2ForwardKeyEvent(_session, event, down);
 }
 
 - (void)keyDown:(NSEvent *)event
@@ -104,6 +71,9 @@ static uint32_t keysymForChar(unichar c)
  * the per-key device-dependent bits. */
 - (void)flagsChanged:(NSEvent *)event
 {
+    /* Shift, Control and Caps Lock can be bound to a joystick action. */
+    Apple2ForwardModifierEvent(_session, event);
+
     const NSEventModifierFlags flags = event.modifierFlags;
     BOOL open = _openAppleDown, closed = _closedAppleDown;
 
@@ -134,6 +104,8 @@ static uint32_t keysymForChar(unichar c)
  * leave an Apple key stuck down. Lift whatever is held on the way out. */
 - (void)resignFirstResponderCleanup
 {
+    /* a bound key held when the focus left would keep steering */
+    apple2session_release_all(_session);
     if (_openAppleDown) {
         _openAppleDown = NO;
         apple2session_key(_session, 0, 0xFFE9, 0, 0, 0);
