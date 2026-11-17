@@ -27,5 +27,18 @@
     <key>NSAllowsLocalNetworking</key>
     <true/>
   </dict>
+  <!-- A game to the system: Game Mode (macOS 14+, when frontmost in full
+       screen) gives it CPU/GPU priority and lowers controller and audio
+       latency; the app is light enough to stay on the integrated GPU. -->
+  <key>LSSupportsGameMode</key>
+  <true/>
+  <key>GCSupportsGameMode</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.games</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.3</string>
 </dict>
 </plist>

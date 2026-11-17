@@ -52,6 +52,9 @@ int audio_start(apple2session *s)
     if (s->audio) return 0;
     /* The app owns its signals; SDL must not intercept SIGINT/SIGTERM. */
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+    /* A small device buffer (512 frames, ~10.7 ms at 48 kHz): Core Audio's
+     * default is several times that. */
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "512");
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         session_set_error(s, "SDL audio init failed: %s", SDL_GetError());
         return -1;

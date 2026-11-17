@@ -15,6 +15,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <time.h>
+#include "apple_realtime.h"
 #if defined(_WIN32)
 #include <windows.h>
 #include <mmsystem.h>
@@ -95,8 +96,22 @@ static inline void apple2_sleep_until_us(long target_us)
         rel.tv_nsec = (remain % 1000000L) * 1000L;
         nanosleep(&rel, NULL);
     }
+#elif defined(__APPLE__)
+    /* An absolute deadline on the mach clock: no drift between reading the
+     * time and starting the sleep, which a relative nanosleep has. */
+    static mach_timebase_info_data_t tb;
+    struct timespec now;
+    long remain;
+    if (tb.denom == 0)
+        mach_timebase_info(&tb);
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    remain = target_us - (long)(now.tv_sec * 1000000L + now.tv_nsec / 1000L);
+    if (remain <= 0)
+        return;
+    mach_wait_until(mach_absolute_time() +
+                    (uint64_t)remain * 1000ULL * tb.denom / tb.numer);
 #else
-    /* macOS has no absolute-deadline sleep: nap the remaining
+    /* No absolute-deadline sleep here: nap the remaining
      * delta and re-check, so a short nap can't overshoot the target. */
     for (;;) {
         struct timespec now, rel;

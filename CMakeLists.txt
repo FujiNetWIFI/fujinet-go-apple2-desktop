@@ -1,4 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
+
+# Must be set before project() to take effect. Left unset, Clang defaults the
+# bundle's minimum macOS version to whatever SDK the CI runner's Xcode ships,
+# which can be newer than a real tester's OS ("You can't use this version of
+# the application with this version of macOS"). 13.3 matches the siblings.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS version")
+endif()
 # The version lives here and nowhere else: the About boxes, the macOS bundle
 # and the release workflow all take it from PROJECT_VERSION, and cutting a
 # tag checks that the tag agrees with it (see "Cutting a release" in the

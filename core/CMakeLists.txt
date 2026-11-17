@@ -298,6 +298,13 @@ add_executable(memtools_test tests/memtools_test.c)
 target_link_libraries(memtools_test apple2session)
 target_include_directories(memtools_test PRIVATE debugger)
 
+# The audio ring holds its fill against a mismatched device clock, with no
+# trims and no glitches (applewin/audioring_s16.h).
+add_executable(audioring_test tests/audioring_test.c)
+target_include_directories(audioring_test PRIVATE applewin)
+target_compile_definitions(audioring_test PRIVATE AUDIORING_HEADER="audioring_s16.h")
+add_test(NAME audioring COMMAND audioring_test)
+
 add_executable(video_test tests/video_test.c)
 target_link_libraries(video_test apple2session)
 

@@ -1,0 +1,152 @@
+/*
+ * DisplayExtras.inc -- the keyboard and the aspect modes, included into the
+ * display view's @implementation (see DisplayGlue.h).
+ *
+ * Keys are forwarded press AND release, because the core tracks Open Apple
+ * and Closed Apple as held modifiers -- and on a Mac those arrive through
+ * flagsChanged:, not keyDown:.
+ *
+ * Copyright (C) 2026 Thomas Cherryhomes
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/* Virtual key codes for the two Option keys. Spelled out rather than pulled
+ * from <Carbon/Carbon.h> (kVK_Option / kVK_RightOption): linking the whole
+ * Carbon framework for two integers is not a trade worth making, and these
+ * are ANSI keyboard positions fixed since the Apple Extended Keyboard. */
+#define VK_OPTION_LEFT  0x3A
+#define VK_OPTION_RIGHT 0x3D
+
+- (void)extraInit {}
+
+/* The frame clock follows the window (viewDidMoveToWindow); the app asks for
+ * it explicitly once the window is ordered in. */
+- (void)start { [self updateVisibility]; }
+
+/* 0: the television's 4:3, 1: square pixels, 2: whole-number scale. */
+- (void)setAspectMode:(int)mode
+{
+    atomic_store(&s_fn_aspect_mode, mode);
+    atomic_store(&_redraw, 1);
+    [self setNeedsDisplay:YES];
+}
+
+/* ---- input --------------------------------------------------------------- */
+
+- (BOOL)acceptsFirstResponder
+{
+    return YES;
+}
+
+/* macOS unichar (charactersIgnoringModifiers) -> X11/xkb keysym, for the keys
+ * apple2_key_from_event resolves by keycode rather than by character. */
+static uint32_t keysymForChar(unichar c)
+{
+    switch (c) {
+    case NSUpArrowFunctionKey:    return 0xFF52;
+    case NSDownArrowFunctionKey:  return 0xFF54;
+    case NSLeftArrowFunctionKey:  return 0xFF51;
+    case NSRightArrowFunctionKey: return 0xFF53;
+    case NSDeleteFunctionKey:     return 0xFFFF; /* forward delete */
+    case 0x7F:                    return 0xFF08; /* the key marked Delete */
+    case 0x0D: case 0x03:         return 0xFF0D; /* Return, Enter */
+    case 0x09:                    return 0xFF09;
+    case 0x1B:                    return 0xFF1B;
+    default:                      return 0;
+    }
+}
+
+- (void)forwardKey:(NSEvent *)event down:(int)down
+{
+    NSString *chars = event.charactersIgnoringModifiers;
+    unichar c = chars.length ? [chars characterAtIndex:0] : 0;
+    const BOOL ctrl = (event.modifierFlags & NSEventModifierFlagControl) != 0;
+    const BOOL shift = (event.modifierFlags & NSEventModifierFlagShift) != 0;
+
+    uint32_t keysym = keysymForChar(c);
+    uint32_t unicode = 0;
+    if (!keysym) {
+        /* charactersIgnoringModifiers already drops Ctrl, so this is the
+         * plain character the mapping table wants; the function-key range
+         * (0xF700+) is not a character at all. */
+        if (c >= 0x20 && c < 0xF700)
+            unicode = c;
+        keysym = unicode;
+    }
+    if (!keysym)
+        return;
+    apple2session_key(_session, down, keysym, unicode, ctrl ? 1 : 0,
+                      shift ? 1 : 0);
+}
+
+- (void)keyDown:(NSEvent *)event
+{
+    if (event.isARepeat) {
+        /* The core latches a key until the machine reads it; a repeat storm
+         * would jam it. Let the Apple II's own repeat handle it. */
+        return;
+    }
+    [self forwardKey:event down:1];
+}
+
+- (void)keyUp:(NSEvent *)event
+{
+    [self forwardKey:event down:0];
+}
+
+/* Open Apple and Closed Apple. On a Mac these are the OPTION keys, not the
+ * Command keys: Command is how every menu shortcut on the system is typed,
+ * and swallowing it would cost the user Cmd-Q, Cmd-W and the rest. Option
+ * sits in the same place on the keyboard and is otherwise unused here.
+ *
+ * Modifiers never produce keyDown:/keyUp: -- they arrive as flagsChanged:
+ * with no press/release of their own, so the state is tracked by hand from
+ * the per-key device-dependent bits. */
+- (void)flagsChanged:(NSEvent *)event
+{
+    const NSEventModifierFlags flags = event.modifierFlags;
+    BOOL open = _openAppleDown, closed = _closedAppleDown;
+
+    /* NSEventModifierFlagOption is set while EITHER Option is down, so which
+     * one changed comes from the key code of this event. */
+    switch (event.keyCode) {
+    case VK_OPTION_LEFT:
+        open = (flags & NSEventModifierFlagOption) != 0;
+        break;
+    case VK_OPTION_RIGHT:
+        closed = (flags & NSEventModifierFlagOption) != 0;
+        break;
+    default:
+        break;
+    }
+
+    if (open != _openAppleDown) {
+        _openAppleDown = open;
+        apple2session_key(_session, open ? 1 : 0, 0xFFE9, 0, 0, 0);
+    }
+    if (closed != _closedAppleDown) {
+        _closedAppleDown = closed;
+        apple2session_key(_session, closed ? 1 : 0, 0xFFEA, 0, 0, 0);
+    }
+}
+
+/* Releases go to the key window, so a chord that loses focus mid-press would
+ * leave an Apple key stuck down. Lift whatever is held on the way out. */
+- (void)resignFirstResponderCleanup
+{
+    if (_openAppleDown) {
+        _openAppleDown = NO;
+        apple2session_key(_session, 0, 0xFFE9, 0, 0, 0);
+    }
+    if (_closedAppleDown) {
+        _closedAppleDown = NO;
+        apple2session_key(_session, 0, 0xFFEA, 0, 0, 0);
+    }
+}
+
+- (BOOL)resignFirstResponder
+{
+    [self resignFirstResponderCleanup];
+    return YES;
+}
+

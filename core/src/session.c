@@ -289,6 +289,7 @@ static void *emu_thread_main(void *arg)
     const int pace_log = getenv("APPLE2_PACE_LOG") != NULL;
 
     apple2_thread_setname("apple2-emu");
+    apple_realtime_begin(1e9 / 60.0);   /* a real-time slot on macOS; a no-op elsewhere */
 
     /* Core options must be pushed before the core loads: it reads them at
      * load time, and SET_VARIABLES deliberately will not clobber a key that
